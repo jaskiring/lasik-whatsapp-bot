@@ -22,7 +22,11 @@ app.use(express.json());
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = process.env.API_URL || "http://localhost:3000/api/ingest-lead"; // Fix 4
+const API_URL       = process.env.API_URL;
+console.log("[CHATBOT] API_URL:", API_URL);
+if (!API_URL) {
+  console.error("[CHATBOT] ❌ Missing API_URL env variable");
+}
 const BOT_SECRET    = process.env.BOT_SECRET || "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
