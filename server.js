@@ -18,12 +18,8 @@ app.get("/health", (req, res) => {
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = process.env.API_URL || "https://relive-cure-backend.onrender.com/api/ingest-lead";
-console.log("[CHATBOT] API_URL:", API_URL);
-if (!API_URL) {
-  console.error("[CHATBOT] ❌ Missing API_URL environment fallback? (check code)");
-}
-const BOT_SECRET    = process.env.BOT_SECRET || "RELIVE_BOT_SECRET";
+const API_URL       = "https://relive-cure-backend.onrender.com/api/ingest-lead";
+const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
 // States in which knowledge responses are ALLOWED (Fix 3)
@@ -151,23 +147,24 @@ async function sendToAPI(phone, session, trigger = "complete") {
   const retryDelay = 4000; // 4 seconds
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    console.log(`🔥 SENDING LEAD (Attempt ${attempt}):`, payload);
+    console.log("🔥 SENDING LEAD:", payload);
+    console.log("🔑 BOT KEY:", BOT_SECRET);
     
     try {
       const res = await axios.post(API_URL, payload, {
         headers: { 
           "Content-Type": "application/json", 
-          "x-bot-key": BOT_SECRET || process.env.RELIVE_BOT_SECRET || "RELIVE_BOT_SECRET"
+          "x-bot-key": BOT_SECRET
         },
         timeout: 25000,
       });
-      console.log(`[API] ✅ Success | action=${res.data.action} | id=${res.data.lead_id}`);
+      console.log(`[API] ✅ Success attempt ${attempt} | id=${res.data.lead_id}`);
       session.ingested = true;
       schedulePersist();
-      return; // Exit on success
+      return; 
     } catch (err) {
       const msg = err.response ? JSON.stringify(err.response.data) : err.message;
-      console.error(`[API] Retry ${attempt} failed | phone=${phone} | error=${msg}`);
+      console.log(`[API] ❌ Attempt ${attempt} failed | error=${msg}`);
       
       if (attempt < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -254,7 +251,7 @@ const INTENTS = {
   ],
   SAFETY: [
     "scared", "fear", "safe", "risk", "side effects", 
-    "nervous", "afraid", "dar lag raha", "danger"
+    "nervous", "afraid", "dar lag raha", "danger", "dangerous"
   ]
 };
 
@@ -280,10 +277,10 @@ function detectIntent(message) {
 
 async function checkExistingLead(phone) {
   try {
-    const url = API_URL.replace("/ingest-lead", `/check-lead/${phone}`);
+    const url = "https://relive-cure-backend.onrender.com/api/check-lead/" + phone;
     const res = await axios.get(url, {
       headers: { "x-bot-key": BOT_SECRET },
-      timeout: 5000
+      timeout: 10000
     });
     return res.data.exists ? res.data.lead : null;
   } catch (e) {
@@ -359,7 +356,7 @@ We have slots available this week. Want me to check availability for you? 👇`,
 };
 
 /** Helper for flow resumption */
-function getNextStepMessage(session) {
+function getNextQuestion(session) {
   const d = session.data;
   const name = d.contactName ? d.contactName.split(" ")[0] : "";
   const prefix = name ? `Got it, ${name} 👍\n\n` : "";
@@ -375,11 +372,18 @@ function getNextStepMessage(session) {
 /** Multi-intent response, now with CTA and Flow Resume */
 function buildKnowledgeResponse(message, session) {
   const state = session.state;
-  const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
   
   if (!KNOWLEDGE_ALLOWED_STATES.has(state)) return null;
 
-  const intents = detectAllIntents(message).filter(i => i !== "YES");
+  let intents = detectAllIntents(message).filter(i => i !== "YES");
+  
+  // Power Detection (Requirement 6)
+  const powerRegex = /-?\d+(\.\d+)?/;
+  if (powerRegex.test(message) && !intents.includes("ELIGIBILITY")) {
+    intents.push("ELIGIBILITY");
+    session.data.concern_power = true;
+  }
+
   if (intents.length === 0) return null;
   
   let baseReply = "";
@@ -395,7 +399,7 @@ function buildKnowledgeResponse(message, session) {
   if (!baseReply) return null;
 
   const cta = "\n\nWould you like me to arrange a quick consultation call?";
-  const nextStep = getNextStepMessage(session);
+  const nextStep = getNextQuestion(session);
   const flowResume = nextStep ? `\n\n─────────────\n\n${nextStep}` : "";
 
   return baseReply + cta + flowResume;
@@ -533,7 +537,7 @@ You can ask me about:
 
       session.data.contactName = message;
       session.state = "CITY";
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       const firstName = message.split(" ")[0];
       return res.json({
@@ -547,7 +551,7 @@ Which city are you based in? 📍`
     if (state === "CITY") {
       session.data.city = message;
       session.state = "SURGERY_CITY";
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
@@ -561,7 +565,7 @@ Which city are you based in? 📍`
     if (state === "SURGERY_CITY") {
       session.data.surgeryCity = msgLow.includes("any") ? "Flexible" : message;
       session.state = "INSURANCE";
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
@@ -575,7 +579,7 @@ Which city are you based in? 📍`
     if (state === "INSURANCE") {
       session.data.insurance = message;
       session.state = "TIMELINE";
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
@@ -590,7 +594,7 @@ Which city are you based in? 📍`
       session.data.timeline = message;
       session.state = "COMPLETE";
 
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
@@ -609,6 +613,14 @@ Meanwhile, I can help you with:
 
     // RETURNING
     if (state === "RETURNING" || state === "COMPLETE") {
+      const nextStep = getNextStep(session.data);
+      if (nextStep !== "COMPLETE") {
+        session.state = nextStep;
+        return res.json({
+          reply: `Welcome back 👋\n\nLet's continue where we left off:\n\n${getNextStepMessage(session)}`
+        });
+      }
+
       return res.json({
         reply: `Welcome back 👋
 
@@ -621,14 +633,13 @@ What would you like to know?
 
     // FINAL FALLBACK
     return res.json({
-      reply: `I can help you with that 👍
+      reply: `I didn't fully get that, but I can help with:
 
-Are you looking for:
-• Cost
-• Recovery
-• Eligibility
+• LASIK cost  
+• Recovery time  
+• Eligibility  
 
-Or I can arrange a specialist to guide you.`
+Or I can arrange a specialist call for you.`
     });
 
   } catch (err) {
