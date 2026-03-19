@@ -147,8 +147,8 @@ async function sendToAPI(phone, session, trigger = "complete") {
   const retryDelay = 4000; // 4 seconds
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    console.log("🔥 SENDING LEAD:", payload);
-    console.log("🔑 BOT KEY:", BOT_SECRET);
+    console.log("🔥 SENDING LEAD PAYLOAD:", JSON.stringify(payload, null, 2));
+    console.log("🔑 x-bot-key:", BOT_SECRET);
     
     try {
       const res = await axios.post(API_URL, payload, {
@@ -256,8 +256,9 @@ const INTENTS = {
 };
 
 const SALES_INTENT = [
-  "call me", "call back", "contact me", "talk to doctor", "agent se baat",
-  "call karna", "phone karo", "baat karni hai", "speak to someone", "human support"
+  "call", "specialist", "advisor", "doctor", "consultation", "appointment", 
+  "talk", "callback", "interested", "help", "agent", "human", "baat", 
+  "contact", "phone", "number", "baat karni", "call me", "call back"
 ];
 
 function isSalesIntent(message) {
