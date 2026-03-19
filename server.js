@@ -353,7 +353,6 @@ function buildKnowledgeResponse(message, state) {
 // CHATBOT WEBHOOK
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
-  // Fix 4 (T8 carry-over) — global fail-safe
   try {
     const phone   = req.body.phone;
     const message = (req.body.message || "").trim();
@@ -361,82 +360,63 @@ app.post("/webhook", async (req, res) => {
 
     if (!phone) return res.status(400).json({ error: "phone is required" });
 
-    // ── Init session (in-memory is source of truth) ──────────────────────────
     if (!sessions[phone]) {
       const existing = await checkExistingLead(phone);
-      
-      sessions[phone] = { 
-        state: existing ? "RETURNING" : "GREETING", 
-        data: existing ? { 
+
+      sessions[phone] = {
+        state: existing ? "RETURNING" : "GREETING",
+        data: existing ? {
           contactName: existing.contact_name,
-          is_returning: true,
-          interest_cost: existing.interest_cost,
-          interest_recovery: existing.interest_recovery,
-          concern_pain: existing.concern_pain,
-          concern_safety: existing.concern_safety
-        } : {}, 
-        inactivityTimer: null, 
-        ingested: !!existing,
-        first_ingest_done: !!existing 
+          is_returning: true
+        } : {},
+        inactivityTimer: null,
+        ingested: !!existing
       };
 
-      console.log(`[CHATBOT] New session | phone=${phone} | state=${sessions[phone].state}`);
-      
       if (!existing) {
-        console.log(`[CHATBOT] First message — creating lead immediately | phone=${phone}`);
         sessions[phone].data.lastMessage = msgLow;
         sendToAPI(phone, sessions[phone], "initial");
-        sessions[phone].first_ingest_done = true;
       }
     }
 
     const session = sessions[phone];
 
-    // T5 — timestamp + last message
     session.last_activity_at = new Date().toISOString();
-    session.data.lastMessage  = msgLow;
+    session.data.lastMessage = msgLow;
 
-    // Reset inactivity timer
     resetInactivityTimer(phone);
 
-    const intents = detectAllIntents(msgLow);
-    const intent  = intents[0] || null;
-
-    // Update Intelligence based on all intents in message
-    if (intents.includes("COST")) session.data.interest_cost = true;
-    if (intents.includes("RECOVERY")) session.data.interest_recovery = true;
-    if (intents.includes("ELIGIBILITY")) session.data.concern_safety = true; 
-    if (intents.includes("PAIN")) session.data.concern_pain = true;
-
-    console.log(`[INTENT] Detected: ${intent || "none"} | state=${session.state} | phone=${phone}`);
-
-    // ── SALES INTENT DETECTION (Part 4) ───────────────────────────────────
+    // SALES INTENT
     if (isSalesIntent(msgLow)) {
       session.data.request_call = true;
-      console.log(`[SALES] Call request detected | phone=${phone}`);
       sendToAPI(phone, session, "update");
-      schedulePersist();
-      return res.json({ 
-        reply: `✅ Done!\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Best hospitals` 
+
+      return res.json({
+        reply: `👍 Got it!
+
+Our LASIK specialist will call you shortly.
+
+Meanwhile, you can ask me about:
+• Cost
+• Recovery
+• Eligibility`
       });
     }
 
-    // ── State machine ────────────────────────────────────────────────────────
-    let state = session.state;
-    let reply = "";
-
-    // STEP 2 — FIX KNOWLEDGE RESPONSE
-    const knowledge = buildKnowledgeResponse(msgLow, session.state);
+    // KNOWLEDGE (GLOBAL)
+    const knowledge = buildKnowledgeResponse(msgLow, "COMPLETE");
     if (knowledge) {
-      reply = knowledge + `\n\nWould you like me to:\n• Check your eligibility\n• Book a consultation\n• Talk to a specialist`;
-      sendToAPI(phone, session, "update");
-      schedulePersist();
-      return res.json({ reply });
+      return res.json({
+        reply: knowledge + `
+
+Would you like me to:
+• Check your eligibility
+• Book a consultation
+• Talk to a specialist`
+      });
     }
 
-    // Helper: Find next step for resumption
-    const getNextStep = (s) => {
-      const d = s.data;
+    const getNextStep = (d) => {
       if (!d.contactName || d.contactName === "WhatsApp Lead") return "NAME";
       if (!d.city) return "CITY";
       if (!d.surgeryCity) return "SURGERY_CITY";
@@ -445,118 +425,138 @@ app.post("/webhook", async (req, res) => {
       return "COMPLETE";
     };
 
+    const state = session.state;
+
+    // GREETING
     if (state === "GREETING") {
-      reply = `Hi 👋 I'm the LASIK consultation assistant.\n\nWe help patients connect with trusted eye hospitals.\n\nShall I help you with a few quick details to guide you?`;
       session.state = "ASK_PERMISSION";
+
+      return res.json({
+        reply: `Hi 👋 I'm the LASIK consultation assistant.
+
+We help patients connect with trusted eye hospitals.
+
+Shall I help you with a few quick details to guide you?`
+      });
     }
 
-    else if (state === "RETURNING" || state === "COMPLETE") {
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const next = getNextStep(session);
-      
-      if (next === "COMPLETE") {
-        reply = `Welcome back${name ? " " + name : ""} 👋\n\nI have all your details and our specialist is looking into it.\n\nWhat can I help you with now?\n- Check LASIK cost\n- Recovery time\n- Talk to a doctor`;
-        session.state = "COMPLETE";
-      } else {
-        reply = `Welcome back${name ? " " + name : ""} 👋 Let's continue from where we left off.`;
-        session.state = next;
-        if (next === "NAME") reply += `\n\nMay I know your name?`;
-        else if (next === "CITY") reply += `\n\nWhich city are you based in? 📍`;
-        else if (next === "SURGERY_CITY") reply += `\n\nWhich city would you prefer for the treatment? (You can choose any city or say "anywhere") 🏥`;
-        else if (next === "INSURANCE") reply += `\n\nDo you have medical insurance?`;
-        else if (next === "TIMELINE") reply += `\n\nWhen are you planning the surgery?`;
+    // ASK PERMISSION
+    if (state === "ASK_PERMISSION") {
+      if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("sure") || msgLow.includes("haan")) {
+        session.state = "NAME";
+        return res.json({
+          reply: `Great 👍 May I know your name?`
+        });
       }
+
+      return res.json({
+        reply: `No worries 😊
+
+You can ask me about:
+• Cost
+• Recovery
+• Eligibility`
+      });
     }
 
-    else if (state === "ASK_PERMISSION") {
-      if (intent === "YES" || msgLow.includes("ok") || msgLow.includes("sure")) {
-        const next = getNextStep(session);
-        session.state = next;
-        if (next === "NAME") reply = `Great 👍 May I know your name?`;
-        else if (next === "CITY") reply = `Great 👍 Which city are you based in? 📍`;
-        else reply = `Great 👍 Let's get started.`;
-        sendToAPI(phone, session, "update");
-      } else {
-        reply = `No worries 👍\n\nYou can ask me about:\n• Cost\n• Recovery\n• Eligibility`;
+    // NAME
+    if (state === "NAME") {
+      if (!isValidName(message)) {
+        return res.json({
+          reply: `Could you please tell me your name?`
+        });
       }
-    }
 
-    else if (state === "NAME") {
-      if (isValidName(message)) {
-        session.data.contactName = message.replace(/\b\w/g, c => c.toUpperCase());
-        const next = getNextStep(session);
-        session.state = next;
-        reply = `Nice to meet you, ${session.data.contactName}! 😊`;
-        if (next === "CITY") reply += `\n\nWhich city are you based in? 📍`;
-        else reply += `\n\nWhat else can I help you with?`;
-      } else {
-        reply = `Sorry, I didn't quite catch that. Could you please tell me your name?`;
-      }
+      session.data.contactName = message;
+      session.state = "CITY";
       sendToAPI(phone, session, "update");
+
+      return res.json({
+        reply: `Nice to meet you, ${message}! 😊
+
+Which city are you based in? 📍`
+      });
     }
 
-    else if (state === "CITY") {
-      session.data.city = message.replace(/\b\w/g, c => c.toUpperCase());
-      const next = getNextStep(session);
-      session.state = next;
-      reply = `Understood. Which city would you prefer for surgery? (You can choose any city)`;
+    // CITY
+    if (state === "CITY") {
+      session.data.city = message;
+      session.state = "SURGERY_CITY";
       sendToAPI(phone, session, "update");
+
+      return res.json({
+        reply: `Which city would you prefer for surgery? (You can choose any city)`
+      });
     }
 
-    else if (state === "SURGERY_CITY") {
-      if (msgLow.includes("any") || msgLow.includes("flexible") || msgLow.includes("suggest") || msgLow.includes("not sure")) {
-        session.data.surgeryCity = "Flexible";
-        reply = `Understood. Do you have medical insurance?`;
-      } else {
-        session.data.surgeryCity = message.replace(/\b\w/g, c => c.toUpperCase());
-        reply = `Noted 👍 Do you have medical insurance?`;
-      }
+    // SURGERY CITY
+    if (state === "SURGERY_CITY") {
+      session.data.surgeryCity = msgLow.includes("any") ? "Flexible" : message;
       session.state = "INSURANCE";
       sendToAPI(phone, session, "update");
+
+      return res.json({
+        reply: `Do you have medical insurance?`
+      });
     }
 
-    else if (state === "INSURANCE") {
+    // INSURANCE
+    if (state === "INSURANCE") {
       session.data.insurance = message;
-      const next = getNextStep(session);
-      session.state = next;
-      if (next === "TIMELINE") reply = `Understood. When are you planning the surgery?`;
-      else reply = `Perfect.`;
+      session.state = "TIMELINE";
       sendToAPI(phone, session, "update");
+
+      return res.json({
+        reply: `When are you planning the surgery?`
+      });
     }
 
-    else if (state === "TIMELINE") {
+    // TIMELINE
+    if (state === "TIMELINE") {
       session.data.timeline = message;
       session.state = "COMPLETE";
 
-      if (session.inactivityTimer) {
-        clearTimeout(session.inactivityTimer);
-        session.inactivityTimer = null;
-      }
-
-      const firstName = session.data.contactName ? `, ${session.data.contactName.split(" ")[0]}` : "";
-      reply = `Perfect${firstName}! 🎉\n\nYou look like a strong candidate for LASIK.\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Booking a consultation`;
       sendToAPI(phone, session, "update");
+
+      return res.json({
+        reply: `Perfect! 🎉
+
+Our LASIK specialist will contact you shortly.
+
+Meanwhile, I can help you with:
+• Cost
+• Recovery
+• Booking a consultation`
+      });
     }
 
-    // STEP 3 — ADD SAFETY GUARD (NO MISSES)
-    if (detectAllIntents(msgLow).length > 0) {
-      const k = buildKnowledgeResponse(msgLow, "COMPLETE");
-      if (k) {
-        reply = k + `\n\nWould you like help with next steps?`;
-        return res.json({ reply });
-      }
+    // RETURNING
+    if (state === "RETURNING" || state === "COMPLETE") {
+      return res.json({
+        reply: `Welcome back 👋
+
+What would you like to know?
+• Cost
+• Recovery
+• Talk to a doctor`
+      });
     }
 
-    else {
-      reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation?\n\nIf you prefer, I can also arrange a specialist to guide you.`;
-    }
+    // FINAL FALLBACK
+    return res.json({
+      reply: `I can help you with that 👍
 
-    schedulePersist(); // Fix 1 — debounced full-write
-    res.json({ reply });
+Are you looking for:
+• Cost
+• Recovery
+• Booking a consultation?`
+    });
 
   } catch (err) {
-    console.error("[CHATBOT] ❌ Unhandled error:", err.message);
-    res.json({ reply: `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation?\n\nIf you prefer, I can also arrange a specialist to guide you.` });
+    console.error(err);
+    return res.json({
+      reply: `Something went wrong. Please try again.`
+    });
   }
 });
 

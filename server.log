@@ -1,0 +1,121 @@
+[CHATBOT] API_URL: https://relive-cure-backend.onrender.com/api/ingest-lead
+[SESSION] Hydrated 1 sessions from disk
+[CHATBOT] LASIK bot v3 — port 3001
+[CHATBOT] API_URL: https://relive-cure-backend.onrender.com/api/ingest-lead
+[SESSION] File: /Users/jaskiring/Relive cure v2/lasik-whatsapp-bot-v2/sessions.json
+[CHATBOT] Inactivity timeout: 120s
+[INTENT] Detected: RECOVERY | state=GREETING | phone=9999999999
+[BOT → API] https://relive-cure-backend.onrender.com/api/ingest-lead {
+  phone_number: '9999999999',
+  contact_name: 'WhatsApp Lead',
+  city: '',
+  preferred_surgery_city: '',
+  timeline: '',
+  insurance: '',
+  interest_cost: false,
+  interest_recovery: true,
+  concern_pain: false,
+  concern_safety: false,
+  intent_level: 'COLD',
+  urgency_level: 'low',
+  request_call: false,
+  last_user_message: 'how much time will it take to recover',
+  ingestion_trigger: 'update'
+}
+[API DEBUG] {
+  url: 'https://relive-cure-backend.onrender.com/api/ingest-lead',
+  payload: {
+    phone_number: '9999999999',
+    contact_name: 'WhatsApp Lead',
+    city: '',
+    preferred_surgery_city: '',
+    timeline: '',
+    insurance: '',
+    interest_cost: false,
+    interest_recovery: true,
+    concern_pain: false,
+    concern_safety: false,
+    intent_level: 'COLD',
+    urgency_level: 'low',
+    request_call: false,
+    last_user_message: 'how much time will it take to recover',
+    ingestion_trigger: 'update'
+  }
+}
+[INTENT] Detected: TIMELINE | state=GREETING | phone=9999999999
+[BOT → API] https://relive-cure-backend.onrender.com/api/ingest-lead {
+  phone_number: '9999999999',
+  contact_name: 'WhatsApp Lead',
+  city: '',
+  preferred_surgery_city: '',
+  timeline: '',
+  insurance: '',
+  interest_cost: false,
+  interest_recovery: true,
+  concern_pain: false,
+  concern_safety: false,
+  intent_level: 'COLD',
+  urgency_level: 'low',
+  request_call: false,
+  last_user_message: 'when can i get surgery',
+  ingestion_trigger: 'update'
+}
+[API DEBUG] {
+  url: 'https://relive-cure-backend.onrender.com/api/ingest-lead',
+  payload: {
+    phone_number: '9999999999',
+    contact_name: 'WhatsApp Lead',
+    city: '',
+    preferred_surgery_city: '',
+    timeline: '',
+    insurance: '',
+    interest_cost: false,
+    interest_recovery: true,
+    concern_pain: false,
+    concern_safety: false,
+    intent_level: 'COLD',
+    urgency_level: 'low',
+    request_call: false,
+    last_user_message: 'when can i get surgery',
+    ingestion_trigger: 'update'
+  }
+}
+[INTENT] Detected: none | state=GREETING | phone=9999999999
+[SALES] Call request detected | phone=9999999999
+[BOT → API] https://relive-cure-backend.onrender.com/api/ingest-lead {
+  phone_number: '9999999999',
+  contact_name: 'WhatsApp Lead',
+  city: '',
+  preferred_surgery_city: '',
+  timeline: '',
+  insurance: '',
+  interest_cost: false,
+  interest_recovery: true,
+  concern_pain: false,
+  concern_safety: false,
+  intent_level: 'COLD',
+  urgency_level: 'low',
+  request_call: true,
+  last_user_message: 'call me',
+  ingestion_trigger: 'update'
+}
+[API DEBUG] {
+  url: 'https://relive-cure-backend.onrender.com/api/ingest-lead',
+  payload: {
+    phone_number: '9999999999',
+    contact_name: 'WhatsApp Lead',
+    city: '',
+    preferred_surgery_city: '',
+    timeline: '',
+    insurance: '',
+    interest_cost: false,
+    interest_recovery: true,
+    concern_pain: false,
+    concern_safety: false,
+    intent_level: 'COLD',
+    urgency_level: 'low',
+    request_call: true,
+    last_user_message: 'call me',
+    ingestion_trigger: 'update'
+  }
+}
