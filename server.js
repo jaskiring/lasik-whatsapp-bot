@@ -202,11 +202,11 @@ function resetInactivityTimer(phone) {
 // ─────────────────────────────────────────────────────────────────────────────
 const INTENTS = {
   RECOVERY: [
-    "recovery","recover","heal","healing",
-    "kitne din","kitna time","thik hone me kitna","recover hone me",
-    "kitne ghante","kab thik","kab theek","kab tak normal",
-    "vision kab clear","vision kab","thik hoga","normal kab",
-    "thene me kitna","kitna din lagta","kab se normal"
+    "recovery", "recover", "healing",
+    "kitne din", "kitna time", "kab tak",
+    "how much time", "how long", "time will it take",
+    "will it take", "recover time", "recovery time",
+    "kitna time lagega", "time lagega", "kitna din lagega"
   ],
   PAIN: [
     "pain","painful","dard","dard hoga","takleef","hurt",
@@ -416,7 +416,11 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // Fix B — Knowledge response with follow-up options
+    // ── State machine ────────────────────────────────────────────────────────
+    let state = session.state;
+    let reply = "";
+
+    // Fix 2 — FORCE KNOWLEDGE PRIORITY
     const knowledge = buildKnowledgeResponse(msgLow, session.state);
     if (knowledge) {
       reply = knowledge + `\n\nWould you like me to:\n• Check your eligibility\n• Book a consultation\n• Or guide you further?`;
@@ -424,10 +428,6 @@ app.post("/webhook", async (req, res) => {
       schedulePersist();
       return res.json({ reply });
     }
-
-    // ── State machine ────────────────────────────────────────────────────────
-    let state = session.state;
-    let reply = "";
 
     // Helper: Find next step for resumption
     const getNextStep = (s) => {
@@ -472,7 +472,7 @@ app.post("/webhook", async (req, res) => {
         else reply = `Great 👍 Let's get started.`;
         sendToAPI(phone, session, "update");
       } else {
-        reply = `I can definitely help with that 👍\n\nCould you tell me a bit more so I can guide you better?\n\nOr I can help with:\n• Cost\n• Recovery\n• Booking consultation`;
+        reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation`;
       }
     }
 
@@ -536,8 +536,17 @@ app.post("/webhook", async (req, res) => {
       sendToAPI(phone, session, "update");
     }
 
+    // Fix 4 — SAFETY GUARD (MANDATORY)
+    if (detectAllIntents(msgLow).length > 0) {
+      const k = buildKnowledgeResponse(msgLow, "COMPLETE");
+      if (k) {
+        reply = k + `\n\nWould you like help with next steps?`;
+        return res.json({ reply });
+      }
+    }
+
     else {
-      reply = `Got it 👍\n\nOur specialist will contact you shortly.`;
+      reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation`;
     }
 
     schedulePersist(); // Fix 1 — debounced full-write
@@ -545,7 +554,7 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("[CHATBOT] ❌ Unhandled error:", err.message);
-    res.json({ reply: "Got it 👍 I'm sharing your details with our LASIK specialist who will guide you better." });
+    res.json({ reply: `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation` });
   }
 });
 
