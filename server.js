@@ -206,7 +206,8 @@ const INTENTS = {
     "kitne din", "kitna time", "kab tak",
     "how much time", "how long", "time will it take",
     "will it take", "recover time", "recovery time",
-    "kitna time lagega", "time lagega", "kitna din lagega"
+    "kitna time lagega", "time lagega", "kitna din lagega",
+    "how fast recover", "kitna jaldi recover"
   ],
   PAIN: [
     "pain","painful","dard","dard hoga","takleef","hurt",
@@ -234,10 +235,10 @@ const INTENTS = {
     "yes","haan","ha","haan ji","ok","okay","sure","chalo","start","bilkul"
   ],
   TIMELINE: [
-    "when", "how soon", "timeline", "schedule", "availability", 
+    "when", "how soon", "timeline", "schedule", "availability",
     "kab", "kitne din", "kitna time", "kab tak", "jaldi",
     "when can i", "how fast", "next week", "this week",
-    "earliest", "soon", "immediately", "kitna jaldi", "time lagega"
+    "earliest", "soon", "immediately", "kitna jaldi"
   ]
 };
 
@@ -323,7 +324,7 @@ Our specialist will contact you shortly.`,
   TIMELINE: `📅 *LASIK Timeline:*
 
 • Surgery time → 10–15 mins for both eyes
-• Recovery → 12–24 hours
+• Recovery → 4–12 hours
 • Resuming work → After 1–2 days
 
 We have slots available this week. Want me to check availability for you? 👇`,
@@ -412,7 +413,7 @@ app.post("/webhook", async (req, res) => {
       sendToAPI(phone, session, "update");
       schedulePersist();
       return res.json({ 
-        reply: `✅ Done!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Best hospitals` 
+        reply: `✅ Done!\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Best hospitals` 
       });
     }
 
@@ -420,10 +421,10 @@ app.post("/webhook", async (req, res) => {
     let state = session.state;
     let reply = "";
 
-    // Fix 2 — FORCE KNOWLEDGE PRIORITY
+    // STEP 2 — FIX KNOWLEDGE RESPONSE
     const knowledge = buildKnowledgeResponse(msgLow, session.state);
     if (knowledge) {
-      reply = knowledge + `\n\nWould you like me to:\n• Check your eligibility\n• Book a consultation\n• Or guide you further?`;
+      reply = knowledge + `\n\nWould you like me to:\n• Check your eligibility\n• Book a consultation\n• Talk to a specialist`;
       sendToAPI(phone, session, "update");
       schedulePersist();
       return res.json({ reply });
@@ -472,7 +473,7 @@ app.post("/webhook", async (req, res) => {
         else reply = `Great 👍 Let's get started.`;
         sendToAPI(phone, session, "update");
       } else {
-        reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation`;
+        reply = `No worries 👍\n\nYou can ask me about:\n• Cost\n• Recovery\n• Eligibility`;
       }
     }
 
@@ -483,7 +484,7 @@ app.post("/webhook", async (req, res) => {
         session.state = next;
         reply = `Nice to meet you, ${session.data.contactName}! 😊`;
         if (next === "CITY") reply += `\n\nWhich city are you based in? 📍`;
-        else reply += `\n\nGot it. What else can I help with?`;
+        else reply += `\n\nWhat else can I help you with?`;
       } else {
         reply = `Sorry, I didn't quite catch that. Could you please tell me your name?`;
       }
@@ -528,15 +529,12 @@ app.post("/webhook", async (req, res) => {
         session.inactivityTimer = null;
       }
 
-      const firstName = (session.data.contactName && session.data.contactName !== "WhatsApp Lead")
-        ? `, ${session.data.contactName.split(" ")[0]}`
-        : "";
-      
-      reply = `Perfect${firstName}! 🎉\n\nYou look like a strong candidate for LASIK.\n\nI can do this for you right now:\n\n• 📞 Arrange a specialist call\n• 🏥 Book consultation\n• 💬 Answer your questions\n\nWhat would you like to do?`;
+      const firstName = session.data.contactName ? `, ${session.data.contactName.split(" ")[0]}` : "";
+      reply = `Perfect${firstName}! 🎉\n\nYou look like a strong candidate for LASIK.\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Booking a consultation`;
       sendToAPI(phone, session, "update");
     }
 
-    // Fix 4 — SAFETY GUARD (MANDATORY)
+    // STEP 3 — ADD SAFETY GUARD (NO MISSES)
     if (detectAllIntents(msgLow).length > 0) {
       const k = buildKnowledgeResponse(msgLow, "COMPLETE");
       if (k) {
@@ -546,7 +544,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     else {
-      reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation`;
+      reply = `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation?\n\nIf you prefer, I can also arrange a specialist to guide you.`;
     }
 
     schedulePersist(); // Fix 1 — debounced full-write
@@ -554,7 +552,7 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("[CHATBOT] ❌ Unhandled error:", err.message);
-    res.json({ reply: `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation` });
+    res.json({ reply: `I can help you with that 👍\n\nAre you looking for:\n• Cost\n• Recovery\n• Booking a consultation?\n\nIf you prefer, I can also arrange a specialist to guide you.` });
   }
 });
 
