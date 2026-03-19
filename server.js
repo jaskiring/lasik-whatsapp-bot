@@ -157,9 +157,9 @@ async function sendToAPI(phone, session, trigger = "complete") {
     const res = await axios.post(API_URL, payload, {
       headers: { 
         "Content-Type": "application/json", 
-        "x-bot-key": BOT_SECRET 
+        "x-bot-key": BOT_SECRET || process.env.RELIVE_BOT_SECRET || "RELIVE_BOT_SECRET"
       },
-      timeout: 10000,
+      timeout: 20000,
     });
     console.log(`[API] ✅ Success | action=${res.data.action} | id=${res.data.lead_id}`);
     session.ingested = true;
