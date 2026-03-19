@@ -235,7 +235,9 @@ const INTENTS = {
   ],
   TIMELINE: [
     "when", "how soon", "timeline", "schedule", "availability", 
-    "kab", "kitne din", "kitna time", "kab tak", "jaldi", "immediately"
+    "kab", "kitne din", "kitna time", "kab tak", "jaldi",
+    "when can i", "how fast", "next week", "this week",
+    "earliest", "soon", "immediately", "kitna jaldi", "time lagega"
   ]
 };
 
@@ -410,15 +412,17 @@ app.post("/webhook", async (req, res) => {
       sendToAPI(phone, session, "update");
       schedulePersist();
       return res.json({ 
-        reply: "👍 Got it!\nOur LASIK specialist will call you shortly.\n\nYou can also ask me anything meanwhile 😊" 
+        reply: `✅ Done!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, I can also help you with:\n• Cost\n• Recovery\n• Best hospitals` 
       });
     }
 
-    // Fix 3 — Knowledge response only when NOT in data-collection states
+    // Fix B — Knowledge response with follow-up options
     const knowledge = buildKnowledgeResponse(msgLow, session.state);
     if (knowledge) {
+      reply = knowledge + `\n\nWould you like me to:\n• Check your eligibility\n• Book a consultation\n• Or guide you further?`;
+      sendToAPI(phone, session, "update");
       schedulePersist();
-      return res.json({ reply: knowledge });
+      return res.json({ reply });
     }
 
     // ── State machine ────────────────────────────────────────────────────────
@@ -468,7 +472,7 @@ app.post("/webhook", async (req, res) => {
         else reply = `Great 👍 Let's get started.`;
         sendToAPI(phone, session, "update");
       } else {
-        reply = `No problem 😊 Feel free to ask any LASIK questions anytime.`;
+        reply = `I can definitely help with that 👍\n\nCould you tell me a bit more so I can guide you better?\n\nOr I can help with:\n• Cost\n• Recovery\n• Booking consultation`;
       }
     }
 
@@ -490,12 +494,12 @@ app.post("/webhook", async (req, res) => {
       session.data.city = message.replace(/\b\w/g, c => c.toUpperCase());
       const next = getNextStep(session);
       session.state = next;
-      reply = `Understood. Which city would you prefer for surgery? (You can choose any city);`;
+      reply = `Understood. Which city would you prefer for surgery? (You can choose any city)`;
       sendToAPI(phone, session, "update");
     }
 
     else if (state === "SURGERY_CITY") {
-      if (msgLow.includes("anywhere") || msgLow.includes("flexible") || msgLow.includes("suggest") || msgLow.includes("not sure")) {
+      if (msgLow.includes("any") || msgLow.includes("flexible") || msgLow.includes("suggest") || msgLow.includes("not sure")) {
         session.data.surgeryCity = "Flexible";
         reply = `Understood. Do you have medical insurance?`;
       } else {
@@ -528,7 +532,7 @@ app.post("/webhook", async (req, res) => {
         ? `, ${session.data.contactName.split(" ")[0]}`
         : "";
       
-      reply = `Perfect${firstName}! 🎉 Our LASIK specialist will contact you shortly to provide the best options.\n\nMeanwhile, would you like to book a free consultation?\n- Yes, book me\n- Not now`;
+      reply = `Perfect${firstName}! 🎉\n\nYou look like a strong candidate for LASIK.\n\nI can do this for you right now:\n\n• 📞 Arrange a specialist call\n• 🏥 Book consultation\n• 💬 Answer your questions\n\nWhat would you like to do?`;
       sendToAPI(phone, session, "update");
     }
 
