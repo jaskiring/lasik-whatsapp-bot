@@ -18,10 +18,10 @@ app.get("/health", (req, res) => {
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = process.env.API_URL;
+const API_URL       = process.env.API_URL || "https://relive-cure-backend.onrender.com/api/ingest-lead";
 console.log("[CHATBOT] API_URL:", API_URL);
 if (!API_URL) {
-  console.error("[CHATBOT] ❌ Missing API_URL env variable");
+  console.error("[CHATBOT] ❌ Missing API_URL environment fallback? (check code)");
 }
 const BOT_SECRET    = process.env.BOT_SECRET || "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
@@ -146,6 +146,7 @@ async function sendToAPI(phone, session, trigger = "complete") {
     ingestion_trigger:      trigger
   };
 
+  console.log("🔥 SENDING LEAD:", payload);
   console.log("[BOT → API]", API_URL, payload);
 
   console.log("[API DEBUG]", {
@@ -354,6 +355,9 @@ function buildKnowledgeResponse(message, state) {
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
   try {
+    if (!req.body || !req.body.phone || !req.body.message) {
+      return res.status(400).json({ error: "Invalid request" });
+    }
     const phone   = req.body.phone;
     const message = (req.body.message || "").trim();
     const msgLow  = message.toLowerCase();
@@ -375,7 +379,7 @@ app.post("/webhook", async (req, res) => {
 
       if (!existing) {
         sessions[phone].data.lastMessage = msgLow;
-        sendToAPI(phone, sessions[phone], "initial");
+        await sendToAPI(phone, sessions[phone], "initial");
       }
     }
 
@@ -549,7 +553,9 @@ What would you like to know?
 Are you looking for:
 • Cost
 • Recovery
-• Booking a consultation?`
+• Eligibility
+
+Or I can arrange a specialist to guide you.`
     });
 
   } catch (err) {
@@ -564,7 +570,7 @@ Are you looking for:
 // START
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(3001, () => {
-  console.log("[CHATBOT] LASIK bot v3 — port 3001");
+  console.log("🚀 BOT VERSION: PRODUCTION FINAL V1");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
   console.log(`[CHATBOT] Inactivity timeout: ${INACTIVITY_MS / 1000}s`);
