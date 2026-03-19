@@ -143,10 +143,14 @@ async function sendToAPI(phone, session, trigger = "complete") {
     ingestion_trigger:      trigger
   };
 
-  const maxRetries = 3;
-  const retryDelay = 4000; // 4 seconds
+  // ── [WAKE] AUTO BACKEND WAKE ───────────────────────────────────────────────
+  console.log("[WAKE] Triggering backend wake");
+  await axios.get("https://relive-cure-backend.onrender.com/health").catch(() => {});
+  console.log("[WAKE] Waiting for backend...");
+  await new Promise(r => setTimeout(r, 3000));
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  for (let i = 1; i <= 5; i++) {
+    console.log("[API] Attempt:", i);
     console.log("🔥 SENDING LEAD PAYLOAD:", JSON.stringify(payload, null, 2));
     console.log("🔑 x-bot-key:", BOT_SECRET);
     
@@ -156,18 +160,19 @@ async function sendToAPI(phone, session, trigger = "complete") {
           "Content-Type": "application/json", 
           "x-bot-key": BOT_SECRET
         },
-        timeout: 25000,
+        timeout: 40000,
       });
-      console.log(`[API] ✅ Success attempt ${attempt} | id=${res.data.lead_id}`);
+      console.log(`[API] ✅ Success attempt ${i} | id=${res.data.lead_id}`);
       session.ingested = true;
       schedulePersist();
       return; 
     } catch (err) {
       const msg = err.response ? JSON.stringify(err.response.data) : err.message;
-      console.log(`[API] ❌ Attempt ${attempt} failed | error=${msg}`);
+      console.log(`[API] ❌ Attempt ${i} failed | error=${msg}`);
       
-      if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      if (i < 5) {
+        // Exponential backoff
+        await new Promise(r => setTimeout(r, i * 4000));
       } else {
         console.error("❌ FINAL FAILURE: Lead ingestion failed after max retries");
       }
