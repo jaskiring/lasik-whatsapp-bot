@@ -399,6 +399,12 @@ function buildKnowledgeResponse(message, session) {
 
   if (!baseReply) return null;
 
+  // Set Intelligence Flags (Requirement 6 & 10 Hardening)
+  if (intents.includes("COST"))     session.data.interest_cost = true;
+  if (intents.includes("RECOVERY")) session.data.interest_recovery = true;
+  if (intents.includes("PAIN"))     session.data.concern_pain = true;
+  if (intents.includes("SAFETY"))   session.data.concern_safety = true;
+
   const cta = "\n\nWould you like me to arrange a quick consultation call?";
   const nextStep = getNextQuestion(session);
   const flowResume = nextStep ? `\n\n─────────────\n\n${nextStep}` : "";
@@ -467,6 +473,8 @@ Meanwhile, you can ask me about:
     const powerMatch = message.match(/[-+]\d+(\.\d+)?|\b\d+\.\d+\b/);
     if (powerMatch) {
       session.data.concern_power = true;
+      await sendToAPI(phone, session, "update");
+      
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "Got it 👍\n\n";
 
@@ -480,6 +488,8 @@ Would you like me to check your eligibility quickly?`
     // KNOWLEDGE (GLOBAL)
     const knowledge = buildKnowledgeResponse(msgLow, session);
     if (knowledge) {
+      // PERSIST Intelligence extracted in KB
+      await sendToAPI(phone, session, "knowledge");
       return res.json({
         reply: knowledge
       });
