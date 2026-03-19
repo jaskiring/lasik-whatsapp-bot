@@ -23,7 +23,7 @@ const BOT_SECRET    = process.env.BOT_SECRET || "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
 // States in which knowledge responses are ALLOWED (Fix 3)
-const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "COMPLETE"]);
+const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "TIMELINE", "COMPLETE"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fix 1 — DEBOUNCED SESSION PERSISTENCE (concurrency-safe)
@@ -232,6 +232,10 @@ const INTENTS = {
   ],
   YES: [
     "yes","haan","ha","haan ji","ok","okay","sure","chalo","start","bilkul"
+  ],
+  TIMELINE: [
+    "when", "how soon", "timeline", "schedule", "availability", 
+    "kab", "kitne din", "kitna time", "kab tak", "jaldi", "immediately"
   ]
 };
 
@@ -313,6 +317,14 @@ I can check if you're suitable in 2 mins. Shall I? 👇`,
 • No limit on referrals
 
 Our specialist will contact you shortly.`,
+
+  TIMELINE: `📅 *LASIK Timeline:*
+
+• Surgery time → 10–15 mins for both eyes
+• Recovery → 12–24 hours
+• Resuming work → After 1–2 days
+
+We have slots available this week. Want me to check availability for you? 👇`,
 };
 
 /** Multi-intent response, only allowed in specific states. */
@@ -478,17 +490,17 @@ app.post("/webhook", async (req, res) => {
       session.data.city = message.replace(/\b\w/g, c => c.toUpperCase());
       const next = getNextStep(session);
       session.state = next;
-      reply = `Got it 👍 Which city would you prefer for the treatment? (You can choose any city or say "anywhere") 🏥`;
+      reply = `Understood. Which city would you prefer for surgery? (You can choose any city);`;
       sendToAPI(phone, session, "update");
     }
 
     else if (state === "SURGERY_CITY") {
       if (msgLow.includes("anywhere") || msgLow.includes("flexible") || msgLow.includes("suggest") || msgLow.includes("not sure")) {
         session.data.surgeryCity = "Flexible";
-        reply = `No problem 👍 I can suggest the best options for you.\n\nDo you have medical insurance?`;
+        reply = `Understood. Do you have medical insurance?`;
       } else {
         session.data.surgeryCity = message.replace(/\b\w/g, c => c.toUpperCase());
-        reply = `Got it 👍 Which city are you considering for the surgery? ${session.data.surgeryCity}.\n\nDo you have medical insurance?`;
+        reply = `Noted 👍 Do you have medical insurance?`;
       }
       session.state = "INSURANCE";
       sendToAPI(phone, session, "update");
@@ -516,8 +528,8 @@ app.post("/webhook", async (req, res) => {
         ? `, ${session.data.contactName.split(" ")[0]}`
         : "";
       
-      reply = `Perfect${firstName}! 🎉\n\nOur LASIK specialist will contact you shortly.\n\nYou can also ask me anything about LASIK meanwhile. 👨‍⚕️`;
-      sendToAPI(phone, session, "complete");
+      reply = `Perfect${firstName}! 🎉 Our LASIK specialist will contact you shortly to provide the best options.\n\nMeanwhile, would you like to book a free consultation?\n- Yes, book me\n- Not now`;
+      sendToAPI(phone, session, "update");
     }
 
     else {
@@ -529,7 +541,7 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("[CHATBOT] ❌ Unhandled error:", err.message);
-    res.json({ reply: "Got it 👍 Our specialist will contact you shortly." });
+    res.json({ reply: "Got it 👍 I'm sharing your details with our LASIK specialist who will guide you better." });
   }
 });
 
