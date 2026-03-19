@@ -137,6 +137,7 @@ async function sendToAPI(phone, session, trigger = "complete") {
     interest_recovery:      scored.interest_recovery,
     concern_pain:           scored.concern_pain,
     concern_safety:         scored.concern_safety,
+    concern_power:          !!d.concern_power,
 
     intent_level:           scored.intent_band || "COLD",
     urgency_level:          scored.urgency_level || "low",
@@ -146,28 +147,34 @@ async function sendToAPI(phone, session, trigger = "complete") {
     ingestion_trigger:      trigger
   };
 
-  console.log("🔥 SENDING LEAD:", payload);
-  console.log("[BOT → API]", API_URL, payload);
+  const maxRetries = 3;
+  const retryDelay = 4000; // 4 seconds
 
-  console.log("[API DEBUG]", {
-    url: API_URL,
-    payload
-  });
-
-  try {
-    const res = await axios.post(API_URL, payload, {
-      headers: { 
-        "Content-Type": "application/json", 
-        "x-bot-key": BOT_SECRET || process.env.RELIVE_BOT_SECRET || "RELIVE_BOT_SECRET"
-      },
-      timeout: 20000,
-    });
-    console.log(`[API] ✅ Success | action=${res.data.action} | id=${res.data.lead_id}`);
-    session.ingested = true;
-    schedulePersist();
-  } catch (err) {
-    const msg = err.response ? JSON.stringify(err.response.data) : err.message;
-    console.error(`[API] Failed | phone=${phone} | error=${msg}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`🔥 SENDING LEAD (Attempt ${attempt}):`, payload);
+    
+    try {
+      const res = await axios.post(API_URL, payload, {
+        headers: { 
+          "Content-Type": "application/json", 
+          "x-bot-key": BOT_SECRET || process.env.RELIVE_BOT_SECRET || "RELIVE_BOT_SECRET"
+        },
+        timeout: 25000,
+      });
+      console.log(`[API] ✅ Success | action=${res.data.action} | id=${res.data.lead_id}`);
+      session.ingested = true;
+      schedulePersist();
+      return; // Exit on success
+    } catch (err) {
+      const msg = err.response ? JSON.stringify(err.response.data) : err.message;
+      console.error(`[API] Retry ${attempt} failed | phone=${phone} | error=${msg}`);
+      
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      } else {
+        console.error("❌ FINAL FAILURE: Lead ingestion failed after max retries");
+      }
+    }
   }
 }
 
@@ -244,6 +251,10 @@ const INTENTS = {
     "kab", "kitne din", "kitna time", "kab tak", "jaldi",
     "when can i", "how fast", "next week", "this week",
     "earliest", "soon", "immediately", "kitna jaldi"
+  ],
+  SAFETY: [
+    "scared", "fear", "safe", "risk", "side effects", 
+    "nervous", "afraid", "dar lag raha", "danger"
   ]
 };
 
@@ -326,6 +337,18 @@ I can check if you're suitable in 2 mins. Shall I? 👇`,
 
 Our specialist will contact you shortly.`,
 
+  SAFETY: `😊 Totally understandable to feel this way
+
+LASIK is one of the safest procedures:
+
+• No major pain
+• 10–15 min surgery
+• High success rate
+
+Doctors evaluate your eyes before surgery.
+
+Would you like me to check your eligibility?`,
+
   TIMELINE: `📅 *LASIK Timeline:*
 
 • Surgery time → 10–15 mins for both eyes
@@ -335,19 +358,47 @@ Our specialist will contact you shortly.`,
 We have slots available this week. Want me to check availability for you? 👇`,
 };
 
-/** Multi-intent response, only allowed in specific states. */
-function buildKnowledgeResponse(message, state) {
+/** Helper for flow resumption */
+function getNextStepMessage(session) {
+  const d = session.data;
+  const name = d.contactName ? d.contactName.split(" ")[0] : "";
+  const prefix = name ? `Got it, ${name} 👍\n\n` : "";
+
+  if (!d.contactName || d.contactName === "WhatsApp Lead") return `${prefix}May I know your name?`;
+  if (!d.city) return `${prefix}Which city are you based in? 📍`;
+  if (!d.surgeryCity) return `${prefix}Which city would you prefer for surgery? (You can choose any city)`;
+  if (!d.insurance) return `${prefix}Do you have medical insurance?`;
+  if (!d.timeline) return `${prefix}When are you planning the surgery?`;
+  return "";
+}
+
+/** Multi-intent response, now with CTA and Flow Resume */
+function buildKnowledgeResponse(message, session) {
+  const state = session.state;
+  const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+  
   if (!KNOWLEDGE_ALLOWED_STATES.has(state)) return null;
 
   const intents = detectAllIntents(message).filter(i => i !== "YES");
   if (intents.length === 0) return null;
   
-  if (intents.length === 1) return KB[intents[0]] || null;
+  let baseReply = "";
+  if (intents.length === 1) {
+    baseReply = KB[intents[0]] || "";
+  } else {
+    // Combine top 2
+    const r1 = KB[intents[0]] || "";
+    const r2 = KB[intents[1]] || "";
+    baseReply = (r1 && r2) ? `${r1}\n\n─────────────\n\n${r2}` : r1 || r2 || "";
+  }
 
-  // Combine top 2
-  const r1 = KB[intents[0]] || "";
-  const r2 = KB[intents[1]] || "";
-  return (r1 && r2) ? `${r1}\n\n─────────────\n\n${r2}` : r1 || r2 || null;
+  if (!baseReply) return null;
+
+  const cta = "\n\nWould you like me to arrange a quick consultation call?";
+  const nextStep = getNextStepMessage(session);
+  const flowResume = nextStep ? `\n\n─────────────\n\n${nextStep}` : "";
+
+  return baseReply + cta + flowResume;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -393,7 +444,7 @@ app.post("/webhook", async (req, res) => {
     // SALES INTENT
     if (isSalesIntent(msgLow)) {
       session.data.request_call = true;
-      sendToAPI(phone, session, "update");
+      await sendToAPI(phone, session, "update");
 
       return res.json({
         reply: `👍 Got it!
@@ -407,16 +458,25 @@ Meanwhile, you can ask me about:
       });
     }
 
+    // POWER DETECTION
+    const powerMatch = message.match(/[-+]\d+(\.\d+)?|\b\d+\.\d+\b/);
+    if (powerMatch) {
+      session.data.concern_power = true;
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "Got it 👍\n\n";
+
+      return res.json({
+        reply: `${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.
+
+Would you like me to check your eligibility quickly?`
+      });
+    }
+
     // KNOWLEDGE (GLOBAL)
-    const knowledge = buildKnowledgeResponse(msgLow, "COMPLETE");
+    const knowledge = buildKnowledgeResponse(msgLow, session);
     if (knowledge) {
       return res.json({
-        reply: knowledge + `
-
-Would you like me to:
-• Check your eligibility
-• Book a consultation
-• Talk to a specialist`
+        reply: knowledge
       });
     }
 
@@ -475,8 +535,9 @@ You can ask me about:
       session.state = "CITY";
       sendToAPI(phone, session, "update");
 
+      const firstName = message.split(" ")[0];
       return res.json({
-        reply: `Nice to meet you, ${message}! 😊
+        reply: `Nice to meet you, ${firstName}! 😊
 
 Which city are you based in? 📍`
       });
@@ -488,8 +549,11 @@ Which city are you based in? 📍`
       session.state = "SURGERY_CITY";
       sendToAPI(phone, session, "update");
 
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
+
       return res.json({
-        reply: `Which city would you prefer for surgery? (You can choose any city)`
+        reply: `${personalPrefix}Which city would you prefer for surgery? (You can choose any city)`
       });
     }
 
@@ -499,8 +563,11 @@ Which city are you based in? 📍`
       session.state = "INSURANCE";
       sendToAPI(phone, session, "update");
 
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
+
       return res.json({
-        reply: `Do you have medical insurance?`
+        reply: `${personalPrefix}Do you have medical insurance?`
       });
     }
 
@@ -510,8 +577,11 @@ Which city are you based in? 📍`
       session.state = "TIMELINE";
       sendToAPI(phone, session, "update");
 
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
+
       return res.json({
-        reply: `When are you planning the surgery?`
+        reply: `${personalPrefix}When are you planning the surgery?`
       });
     }
 
@@ -522,8 +592,11 @@ Which city are you based in? 📍`
 
       sendToAPI(phone, session, "update");
 
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
+
       return res.json({
-        reply: `Perfect! 🎉
+        reply: `${personalPrefix}
 
 Our LASIK specialist will contact you shortly.
 
@@ -570,7 +643,7 @@ Or I can arrange a specialist to guide you.`
 // START
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(3001, () => {
-  console.log("🚀 BOT VERSION: PRODUCTION FINAL V1");
+  console.log("🚀 BOT VERSION: PRODUCTION FINAL V2");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
   console.log(`[CHATBOT] Inactivity timeout: ${INACTIVITY_MS / 1000}s`);
