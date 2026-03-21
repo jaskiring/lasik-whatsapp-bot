@@ -23,7 +23,7 @@ const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
 // States in which knowledge responses are ALLOWED (Fix 3)
-const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "TIMELINE", "COMPLETE"]);
+const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "TIMELINE", "COMPLETE"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fix 1 — DEBOUNCED SESSION PERSISTENCE (concurrency-safe)
@@ -457,6 +457,33 @@ app.post("/webhook", async (req, res) => {
 
     resetInactivityTimer(phone);
 
+    const restartWords = ["hi","hello","hey","start","hii","helo"];
+    if (sessions[phone] && restartWords.some(w => msgLow === w)) {
+      const existingData = sessions[phone].data || {};
+      const hasCollectedSomething = existingData.contactName && 
+                                     existingData.contactName !== "WhatsApp Lead";
+      
+      clearTimeout(sessions[phone].inactivityTimer);
+      
+      if (hasCollectedSomething) {
+        // User has partial data — ask if they want to continue
+        sessions[phone] = {
+          state: "ASK_RESUME",
+          data: existingData,
+          inactivityTimer: null,
+          ingested: sessions[phone].ingested || false
+        };
+      } else {
+        // No meaningful data collected — fresh start
+        sessions[phone] = {
+          state: "GREETING",
+          data: existingData,
+          inactivityTimer: null,
+          ingested: false
+        };
+      }
+    }
+
     // SALES INTENT
     if (isSalesIntent(msgLow)) {
       session.data.request_call = true;
@@ -511,6 +538,32 @@ Would you like me to check your eligibility quickly?`
 
     const state = session.state;
 
+    // ASK_RESUME — user returned after gap
+    if (state === "ASK_RESUME") {
+      const d = session.data;
+      const name = d.contactName ? d.contactName.split(" ")[0] : "there";
+      
+      const missing = [];
+      if (!d.surgeryCity) missing.push("preferred surgery city");
+      if (!d.insurance) missing.push("insurance");  
+      if (!d.timeline) missing.push("timeline");
+      
+      if (missing.length === 0) {
+        session.state = "COMPLETE";
+        return res.json({
+          reply: `Welcome back, ${name}! 👋 All your details are saved ✅\n\nOur specialist will contact you shortly.`
+        });
+      }
+      
+      // Move to special resume permission state
+      session.state = "ASK_PERMISSION";
+      session.data._resuming = true; // flag that next yes/no is for resuming
+      
+      return res.json({
+        reply: `Welcome back, ${name}! 👋\n\nWould you like to continue where we left off?\n\nStill needed: ${missing.join(", ")}\n\nReply *Yes* to continue or *No* to just chat 😊`
+      });
+    }
+
     // GREETING
     if (state === "GREETING") {
       session.state = "ASK_PERMISSION";
@@ -526,6 +579,40 @@ Shall I help you with a few quick details to guide you?`
 
     // ASK PERMISSION
     if (state === "ASK_PERMISSION") {
+      const d = session.data;
+      
+      // Handle resume yes/no
+      if (d._resuming) {
+        delete session.data._resuming;
+        
+        if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("haan") || msgLow.includes("sure") || msgLow.includes("haan ji")) {
+          // Resume from next missing field
+          if (!d.surgeryCity) {
+            session.state = "SURGERY_CITY";
+            return res.json({ reply: `Great! Let's continue 😊\n\nWhich city would you prefer for surgery?` });
+          }
+          if (!d.insurance) {
+            session.state = "INSURANCE";
+            return res.json({ reply: `Great! Let's continue 😊\n\nDo you have medical insurance?` });
+          }
+          if (!d.timeline) {
+            session.state = "TIMELINE";
+            return res.json({ reply: `Great! Let's continue 😊\n\nWhen are you planning the surgery?` });
+          }
+        } else {
+          // No — free chat mode
+          session.state = "COMPLETE";
+          return res.json({
+            reply: `No problem! 😊 Feel free to ask me anything:
+• LASIK cost
+• Recovery time
+• Eligibility
+• Book consultation`
+          });
+        }
+      }
+
+      // Original new user flow:
       if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("sure") || msgLow.includes("haan")) {
         session.state = "NAME";
         return res.json({
@@ -627,18 +714,13 @@ Meanwhile, I can help you with:
       });
     }
 
-    // RETURNING
+    // RETURNING / COMPLETE
     if (state === "RETURNING" || state === "COMPLETE") {
-      const nextStep = getNextStep(session.data);
-      if (nextStep !== "COMPLETE") {
-        session.state = nextStep;
-        return res.json({
-          reply: `Welcome back 👋\n\nLet's continue where we left off:\n\n${getNextStepMessage(session)}`
-        });
-      }
-
+      const d = session.data;
+      const firstName = d.contactName ? d.contactName.split(" ")[0] : "there";
+      
       return res.json({
-        reply: `Welcome back 👋
+        reply: `Welcome back, ${firstName}! 👋
 
 What would you like to know?
 • Cost
