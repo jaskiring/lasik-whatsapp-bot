@@ -18,7 +18,7 @@ app.get("/health", (req, res) => {
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = "https://relive-cure-backend.onrender.com/api/ingest-lead";
+const API_URL       = "https://relive-cure-backend-production.up.railway.app/api/ingest-lead";
 const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
@@ -145,7 +145,7 @@ async function sendToAPI(phone, session, trigger = "complete") {
 
   // ── [WAKE] AUTO BACKEND WAKE ───────────────────────────────────────────────
   console.log("[WAKE] Triggering backend wake");
-  await axios.get("https://relive-cure-backend.onrender.com/health").catch(() => {});
+  await axios.get("https://relive-cure-backend-production.up.railway.app/health").catch(() => {});
   console.log("[WAKE] Waiting for backend...");
   await new Promise(r => setTimeout(r, 3000));
 
@@ -283,7 +283,7 @@ function detectIntent(message) {
 
 async function checkExistingLead(phone) {
   try {
-    const url = "https://relive-cure-backend.onrender.com/api/check-lead/" + phone;
+    const url = "https://relive-cure-backend-production.up.railway.app/api/check-lead/" + phone;
     const res = await axios.get(url, {
       headers: { "x-bot-key": BOT_SECRET },
       timeout: 10000
