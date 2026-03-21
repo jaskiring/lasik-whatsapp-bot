@@ -458,29 +458,20 @@ app.post("/webhook", async (req, res) => {
     resetInactivityTimer(phone);
 
     const restartWords = ["hi","hello","hey","start","hii","helo"];
-    if (sessions[phone] && restartWords.some(w => msgLow === w)) {
-      const existingData = sessions[phone].data || {};
+    if (session && restartWords.some(w => msgLow === w)) {
+      const existingData = session.data || {};
       const hasCollectedSomething = existingData.contactName && 
                                      existingData.contactName !== "WhatsApp Lead";
       
-      clearTimeout(sessions[phone].inactivityTimer);
+      clearTimeout(session.inactivityTimer);
       
       if (hasCollectedSomething) {
         // User has partial data — ask if they want to continue
-        sessions[phone] = {
-          state: "ASK_RESUME",
-          data: existingData,
-          inactivityTimer: null,
-          ingested: sessions[phone].ingested || false
-        };
+        session.state = "ASK_RESUME";
       } else {
         // No meaningful data collected — fresh start
-        sessions[phone] = {
-          state: "GREETING",
-          data: existingData,
-          inactivityTimer: null,
-          ingested: false
-        };
+        session.state = "GREETING";
+        session.ingested = false;
       }
     }
 
