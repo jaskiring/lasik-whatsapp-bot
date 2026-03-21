@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/health", (req, res) => {
-  res.status(200).send("OK");
+  res.json({ status: "OK", version: "v2-resumption-8b0bc55" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -743,7 +743,7 @@ Or I can arrange a specialist call for you.`
 // START
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(3001, () => {
-  console.log("🚀 BOT VERSION: PRODUCTION FINAL V2");
+  console.log("🚀 BOT VERSION: v2-resumption-8b0bc55");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
   console.log(`[CHATBOT] Inactivity timeout: ${INACTIVITY_MS / 1000}s`);
