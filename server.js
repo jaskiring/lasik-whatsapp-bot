@@ -409,6 +409,7 @@ function buildKnowledgeResponse(message, session) {
   if (intents.includes("RECOVERY")) session.data.interest_recovery = true;
   if (intents.includes("PAIN"))     session.data.concern_pain = true;
   if (intents.includes("SAFETY"))   session.data.concern_safety = true;
+  if (intents.includes("TIMELINE")) session.data.timeline = message;
 
   const cta = "\n\nWould you like me to arrange a quick consultation call?";
   const nextStep = getNextQuestion(session);
