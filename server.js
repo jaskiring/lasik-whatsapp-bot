@@ -136,6 +136,7 @@ async function sendToAPI(phone, session, trigger = "complete") {
     concern_power:          !!d.concern_power,
 
     intent_level:           scored.intent_band || "COLD",
+    intent_score:           scored.intent_score || 0,
     urgency_level:          scored.urgency_level || "low",
     request_call:           d.request_call || false,
 
