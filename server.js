@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", version: "v2-resumption-8b0bc55" });
+  res.json({ status: "OK", version: "v2-resumption-final-fbaf275" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
