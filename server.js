@@ -18,7 +18,7 @@ app.get("/health", (req, res) => {
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = "https://relive-cure-backend-production.up.railway.app/api/ingest-lead";
+const API_URL       = "https://relive-cure-backend.onrender.com/api/ingest-lead";
 const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
@@ -145,10 +145,12 @@ async function sendToAPI(phone, session, trigger = "complete") {
   };
 
   // ── [WAKE] AUTO BACKEND WAKE ───────────────────────────────────────────────
-  console.log("[WAKE] Triggering backend wake");
-  await axios.get("https://relive-cure-backend-production.up.railway.app/health").catch(() => {});
-  console.log("[WAKE] Waiting for backend...");
-  await new Promise(r => setTimeout(r, 3000));
+  console.log("[WAKE] Triggering backend wake ping");
+  await axios.get("https://relive-cure-backend.onrender.com/health").catch((e) => {
+    console.log("[WAKE] Health ping failed (expected on cold start):", e.message);
+  });
+  console.log("[WAKE] Waiting 15s for Render cold start...");
+  await new Promise(r => setTimeout(r, 15000));
 
   for (let i = 1; i <= 5; i++) {
     console.log("[API] Attempt:", i);
@@ -168,14 +170,17 @@ async function sendToAPI(phone, session, trigger = "complete") {
       schedulePersist();
       return; 
     } catch (err) {
-      const msg = err.response ? JSON.stringify(err.response.data) : err.message;
-      console.log(`[API] ❌ Attempt ${i} failed | error=${msg}`);
+      const statusCode = err.response?.status || 'NO_STATUS';
+      const responseBody = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.log(`[API] ❌ Attempt ${i} FAILED | status=${statusCode} | error=${responseBody}`);
+      console.log(`[API] ❌ Full error cause:`, err.cause || err.code || 'none');
       
       if (i < 5) {
-        // Exponential backoff
-        await new Promise(r => setTimeout(r, i * 4000));
+        const backoff = i * 4000;
+        console.log(`[API] Retrying in ${backoff}ms...`);
+        await new Promise(r => setTimeout(r, backoff));
       } else {
-        console.error("❌ FINAL FAILURE: Lead ingestion failed after max retries");
+        console.error("❌ FINAL FAILURE: Lead ingestion failed after all 5 attempts — phone:", phone);
       }
     }
   }
@@ -284,7 +289,7 @@ function detectIntent(message) {
 
 async function checkExistingLead(phone) {
   try {
-    const url = "https://relive-cure-backend-production.up.railway.app/api/check-lead/" + phone;
+    const url = "https://relive-cure-backend.onrender.com/api/check-lead/" + phone;
     const res = await axios.get(url, {
       headers: { "x-bot-key": BOT_SECRET },
       timeout: 10000
@@ -745,8 +750,9 @@ Or I can arrange a specialist call for you.`
 // START
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(3001, () => {
-  console.log("🚀 BOT VERSION: v2-resumption-8b0bc55");
+  console.log("🚀 BOT VERSION: v4-final-render-conn-fix");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
   console.log(`[CHATBOT] Inactivity timeout: ${INACTIVITY_MS / 1000}s`);
+  console.log(`[CHATBOT] Wake delay: 15000ms (Render cold start)`);
 });
