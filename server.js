@@ -144,13 +144,10 @@ async function sendToAPI(phone, session, trigger = "complete") {
     ingestion_trigger:      trigger
   };
 
-  // ── [WAKE] AUTO BACKEND WAKE ───────────────────────────────────────────────
-  console.log("[WAKE] Triggering backend wake ping");
-  await axios.get("https://relive-cure-backend.onrender.com/health").catch((e) => {
-    console.log("[WAKE] Health ping failed (expected on cold start):", e.message);
+  // ── [WAKE] Quick health ping — no force-wait (chatbot is already running)
+  axios.get("https://relive-cure-backend.onrender.com/health").catch((e) => {
+    console.log("[WAKE] Health ping failed:", e.message);
   });
-  console.log("[WAKE] Waiting 15s for Render cold start...");
-  await new Promise(r => setTimeout(r, 15000));
 
   for (let i = 1; i <= 5; i++) {
     console.log("[API] Attempt:", i);
