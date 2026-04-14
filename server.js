@@ -79,10 +79,13 @@ const NAME_BLACKLIST = new Set([
 ]);
 
 function isValidName(str) {
-  if (!str || str.length < 2) return false;
+  if (!str || str.trim().length < 3) return false;
   const cleaned = str.toLowerCase().trim();
   if (NAME_BLACKLIST.has(cleaned)) return false;
-  return /^[a-zA-Z\s]+$/.test(str.trim()); // only letters + spaces, no digits
+  if (!/^[a-zA-Z\s]+$/.test(str.trim())) return false; // only letters + spaces, no digits
+  // At least one word must be 3+ characters (prevents "jas" type short fragments alone)
+  const words = str.trim().split(/\s+/);
+  return words.some(w => w.length >= 3);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
