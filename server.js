@@ -23,7 +23,7 @@ const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
 // States in which knowledge responses are ALLOWED (Fix 3)
-const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "TIMELINE", "COMPLETE"]);
+const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "COMPLETE"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fix 1 — DEBOUNCED SESSION PERSISTENCE (concurrency-safe)
@@ -512,6 +512,22 @@ Meanwhile, you can ask me about:
         reply: `${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.
 
 Would you like me to check your eligibility quickly?`
+      });
+    }
+
+    // ── TIMELINE STATE OVERRIDE — must run BEFORE knowledge base ─────────────
+    // When bot is in TIMELINE state, ALWAYS capture reply as timeline.
+    // Intent detection / KB must NOT intercept this.
+    if (session.state === "TIMELINE") {
+      session.data.timeline = message;
+      session.state = "COMPLETE";
+      await sendToAPI(phone, session, "update");
+
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
+
+      return res.json({
+        reply: `${personalPrefix}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost\n• Recovery\n• Booking a consultation`
       });
     }
 
