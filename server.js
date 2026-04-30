@@ -18,11 +18,11 @@ app.get("/health", (req, res) => {
 // CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
-const API_URL       = "https://relive-cure-backend.onrender.com/api/ingest-lead";
+const API_URL       = "https://relive-cure-backend-production.up.railway.app/api/ingest-lead";
 const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
-// States in which knowledge responses are ALLOWED (Fix 3)
+// States in which knowledge responses are ALLOWED (TIMELINE excluded — handled by state override)
 const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "COMPLETE"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ async function sendToAPI(phone, session, trigger = "complete") {
   };
 
   // ── [WAKE] Quick health ping — no force-wait (chatbot is already running)
-  axios.get("https://relive-cure-backend.onrender.com/health").catch((e) => {
+  axios.get("https://relive-cure-backend-production.up.railway.app/health").catch((e) => {
     console.log("[WAKE] Health ping failed:", e.message);
   });
 
@@ -289,7 +289,7 @@ function detectIntent(message) {
 
 async function checkExistingLead(phone) {
   try {
-    const url = "https://relive-cure-backend.onrender.com/api/check-lead/" + phone;
+    const url = "https://relive-cure-backend-production.up.railway.app/api/check-lead/" + phone;
     const res = await axios.get(url, {
       headers: { "x-bot-key": BOT_SECRET },
       timeout: 10000
@@ -706,27 +706,8 @@ Which city are you based in? 📍`
       });
     }
 
-    // TIMELINE
-    if (state === "TIMELINE") {
-      session.data.timeline = message;
-      session.state = "COMPLETE";
-
-      await sendToAPI(phone, session, "update");
-
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
-
-      return res.json({
-        reply: `${personalPrefix}
-
-Our LASIK specialist will contact you shortly.
-
-Meanwhile, I can help you with:
-• Cost
-• Recovery
-• Booking a consultation`
-      });
-    }
+    // TIMELINE — handled BEFORE knowledge base (see override block above)
+    // This point is never reached when state=TIMELINE
 
     // RETURNING / COMPLETE
     if (state === "RETURNING" || state === "COMPLETE") {
