@@ -22,8 +22,8 @@ const API_URL       = "https://relive-cure-backend-production.up.railway.app/api
 const BOT_SECRET    = "RELIVE_BOT_SECRET";
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
-// States in which knowledge responses are ALLOWED (TIMELINE excluded — handled by state override)
-const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "INSURANCE", "SURGERY_CITY", "COMPLETE"]);
+// States in which knowledge responses are ALLOWED (TIMELINE, SURGERY_CITY, INSURANCE excluded — direct answer required)
+const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RESUME", "NAME", "CITY", "COMPLETE"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fix 1 — DEBOUNCED SESSION PERSISTENCE (concurrency-safe)
