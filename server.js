@@ -427,7 +427,69 @@ function buildKnowledgeResponse(message, session) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CHATBOT WEBHOOK
 // ─────────────────────────────────────────────────────────────────────────────
+app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = "relive_verify_token_123";
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+async function sendWhatsAppReply(phone, reply) {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.PHONE_NUMBER_ID) {
+    console.log('[WA SEND DRY RUN]', phone, '->', reply);
+    return;
+  }
+  const url = `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to: phone,
+    text: { body: reply }
+  };
+  try {
+    console.log('[WA SEND] Sending reply to', phone);
+    await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    });
+  } catch (err) {
+    console.error('[WA SEND] ❌ Error:', err.response?.data || err.message);
+  }
+}
+
 app.post("/webhook", async (req, res) => {
+  // Acknowledge Meta immediately
+  if (req.body && req.body.entry) {
+    res.sendStatus(200);
+  }
+
+  // --- Meta Webhook Adapter ---
+  if (req.body && req.body.entry) {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const messageObj = value?.messages?.[0];
+    if (!messageObj) return; // Ignore status updates
+    req.body.phone = messageObj.from;
+    req.body.message = messageObj.text?.body || "";
+  }
+  
+  const originalPhone = req.body.phone;
+  const originalJson = res.json.bind(res);
+  res.json = async function(body) {
+    if (body && body.reply && originalPhone) {
+      await sendWhatsAppReply(originalPhone, body.reply);
+    }
+    return originalJson(body);
+  };
+  // ----------------------------
+
   try {
     if (!req.body || !req.body.phone || !req.body.message) {
       return res.status(400).json({ error: "Invalid request" });
