@@ -746,7 +746,9 @@ Or I can arrange a specialist call for you.`
 // ─────────────────────────────────────────────────────────────────────────────
 // START
 // ─────────────────────────────────────────────────────────────────────────────
-app.listen(3001, () => {
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`[SERVER] WhatsApp Bot is running on port ${PORT}`);
   console.log("🚀 BOT VERSION: v4-final-render-conn-fix");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
