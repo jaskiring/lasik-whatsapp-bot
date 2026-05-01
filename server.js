@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", version: "v2-P0-stability-deployed" });
+  res.json({ status: "OK", version: "v4.1-hardened" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,6 +39,15 @@ const KNOWLEDGE_ALLOWED_STATES = new Set(["GREETING", "ASK_PERMISSION", "ASK_RES
 // Disk write is debounced 200ms so rapid concurrent messages don't cause races.
 // ─────────────────────────────────────────────────────────────────────────────
 let sessions = {};
+const processedMessages = new Map();
+
+// Periodic cleanup for deduplication map
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, timestamp] of processedMessages.entries()) {
+    if (now - timestamp > 60000) processedMessages.delete(id);
+  }
+}, 30000);
 
 // Hydrate from disk on startup
 try {
@@ -64,11 +73,15 @@ function schedulePersist() {
       const toWrite = {};
       for (const [p, s] of Object.entries(sessions)) {
         toWrite[p] = {
-          state:            s.state,
-          data:             s.data,
-          ingested:         s.ingested,
-          first_ingest_done: s.first_ingest_done,
-          last_activity_at: s.last_activity_at,
+          state:               s.state,
+          data:                s.data,
+          ingested:            s.ingested,
+          first_ingest_done:    s.first_ingest_done,
+          last_activity_at:    s.last_activity_at,
+          // Memory flags
+          repeat_count:        s.repeat_count || {},
+          resume_offered:      s.resume_offered || false,
+          last_intent_handled: s.last_intent_handled || null
         };
       }
       fs.writeFileSync(SESSION_FILE, JSON.stringify(toWrite, null, 2));
@@ -375,21 +388,6 @@ Would you like me to check your eligibility?`,
 We have slots available this week. Want me to check availability for you? 👇`,
 };
 
-/** Helper for flow resumption */
-function getNextQuestion(session) {
-  const d = session.data;
-  const name = d.contactName ? d.contactName.split(" ")[0] : "";
-  const prefix = name ? `Got it, ${name} 👍\n\n` : "";
-
-  if (!d.contactName || d.contactName === "WhatsApp Lead") return `${prefix}May I know your name?`;
-  if (!d.city) return `${prefix}Which city are you based in? 📍`;
-  if (!d.surgeryCity) return `${prefix}Which city would you prefer for surgery? (You can choose any city)`;
-  if (!d.insurance) return `${prefix}Do you have medical insurance?`;
-  if (!d.timeline) return `${prefix}When are you planning the surgery?`;
-  return "";
-}
-
-/** Multi-intent response, now with CTA and Flow Resume */
 function buildKnowledgeResponse(message, session) {
   const state = session.state;
   
@@ -397,9 +395,10 @@ function buildKnowledgeResponse(message, session) {
 
   let intents = detectAllIntents(message).filter(i => i !== "YES");
   
-  // Power Detection (Requirement 6)
+  // Power Detection
+  const m = message.toLowerCase();
   const powerRegex = /-?\d+(\.\d+)?/;
-  if (powerRegex.test(message) && !intents.includes("ELIGIBILITY")) {
+  if (powerRegex.test(m) && !intents.includes("ELIGIBILITY")) {
     intents.push("ELIGIBILITY");
     session.data.concern_power = true;
   }
@@ -407,18 +406,32 @@ function buildKnowledgeResponse(message, session) {
   if (intents.length === 0) return null;
   
   let baseReply = "";
-  if (intents.length === 1) {
-    baseReply = KB[intents[0]] || "";
+  
+  // Intent Memory Control
+  const topIntent = intents[0];
+  if (session.last_intent_handled === topIntent) {
+    // Short version
+    const shortPhrases = [
+      `As I mentioned, ${topIntent.toLowerCase()} is quite important for LASIK.`,
+      `Regarding ${topIntent.toLowerCase()}, I covered the basics above.`,
+      `Still thinking about ${topIntent.toLowerCase()}?`
+    ];
+    baseReply = shortPhrases[Math.floor(Math.random() * shortPhrases.length)];
   } else {
-    // Combine top 2
-    const r1 = KB[intents[0]] || "";
-    const r2 = KB[intents[1]] || "";
-    baseReply = (r1 && r2) ? `${r1}\n\n─────────────\n\n${r2}` : r1 || r2 || "";
+    session.last_intent_handled = topIntent;
+    if (intents.length === 1) {
+      baseReply = KB[intents[0]] || "";
+    } else {
+      // Combine top 2
+      const r1 = KB[intents[0]] || "";
+      const r2 = KB[intents[1]] || "";
+      baseReply = (r1 && r2) ? `${r1}\n\n─────────────\n\n${r2}` : r1 || r2 || "";
+    }
   }
 
   if (!baseReply) return null;
 
-  // Set Intelligence Flags (Requirement 6 & 10 Hardening)
+  // Set Intelligence Flags
   if (intents.includes("COST"))     session.data.interest_cost = true;
   if (intents.includes("RECOVERY")) session.data.interest_recovery = true;
   if (intents.includes("PAIN"))     session.data.concern_pain = true;
@@ -426,10 +439,87 @@ function buildKnowledgeResponse(message, session) {
   if (intents.includes("TIMELINE")) session.data.timeline = message;
 
   const cta = "\n\nWould you like me to arrange a quick consultation call?";
-  const nextStep = getNextQuestion(session);
-  const flowResume = nextStep ? `\n\n─────────────\n\n${nextStep}` : "";
+  
+  // Smart Resume
+  const nextStep = getNextQuestion(session, "resume");
+  const flowResume = nextStep.text ? `\n\n─────────────\n\n${nextStep.text}` : "";
 
   return baseReply + cta + flowResume;
+}
+
+const QUESTION_VARIATIONS = {
+  NAME: [
+    "May I know your name?",
+    "What should I call you?",
+    "Quick thing—your name?",
+    "Before we continue, your name?"
+  ],
+  CITY: [
+    "Which city are you based in? 📍",
+    "Where do you stay? (City name)",
+    "Can you tell me your city?"
+  ],
+  SURGERY_CITY: [
+    "Which city would you prefer for surgery? (You can choose any city)",
+    "Where would you like to get the surgery done?",
+    "Preferred city for the procedure?"
+  ],
+  INSURANCE: [
+    "Do you have medical insurance?",
+    "Got any health insurance that covers eye surgery?",
+    "Are you covered by insurance?"
+  ],
+  TIMELINE: [
+    "When are you planning the surgery?",
+    "How soon are you looking to get this done?",
+    "Any specific month or week in mind for LASIK?"
+  ]
+};
+
+/** Helper for flow resumption */
+function getNextQuestion(session, context = "normal") {
+  const d = session.data;
+  const firstName = d.contactName && d.contactName !== "WhatsApp Lead" ? d.contactName.split(" ")[0] : "";
+  
+  let field = null;
+  let variations = [];
+
+  if (!d.contactName || d.contactName === "WhatsApp Lead") {
+    field = "NAME";
+    variations = QUESTION_VARIATIONS.NAME;
+  } else if (!d.city) {
+    field = "CITY";
+    variations = QUESTION_VARIATIONS.CITY;
+  } else if (!d.surgeryCity) {
+    field = "SURGERY_CITY";
+    variations = QUESTION_VARIATIONS.SURGERY_CITY;
+  } else if (!d.insurance) {
+    field = "INSURANCE";
+    variations = QUESTION_VARIATIONS.INSURANCE;
+  } else if (!d.timeline) {
+    field = "TIMELINE";
+    variations = QUESTION_VARIATIONS.TIMELINE;
+  }
+
+  if (!field) return { text: "", field: null };
+
+  let text = variations[Math.floor(Math.random() * variations.length)];
+  
+  if (context === "resume") {
+    const resumePhrases = [
+      "By the way, can I get your [FIELD] so I can help better?",
+      "Just to continue—your [FIELD]?",
+      "Moving forward, could you tell me your [FIELD]?"
+    ];
+    const phrase = resumePhrases[Math.floor(Math.random() * resumePhrases.length)];
+    const fieldFriendly = field.toLowerCase().replace("_", " ");
+    text = phrase.replace("[FIELD]", fieldFriendly);
+  } else {
+    const prefix = firstName ? `Got it, ${firstName} 👍\n\n` : "";
+    text = prefix + text;
+  }
+
+  return { text, field };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -497,263 +587,273 @@ async function sendWhatsAppReply(phone, reply) {
 }
 
 async function handleIncomingMessage(reqBody) {
+  let phone, message, msgId;
+  let reply = null;
+  let replied = false;
+  let finalized = false;
+
+  const setReply = (text) => {
+    if (replied) return;
+    reply = text;
+    replied = true;
+  };
+
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+
+    if (!reply) {
+      reply = `I didn't fully get that, but I can help with:\n\n• LASIK cost  \n• Recovery time  \n• Eligibility  \n\nOr I can arrange a specialist call for you.`;
+    }
+
+    console.log('[REPLY_FINAL]', reply);
+    sendWhatsAppReply(phone, reply);
+  };
+
   try {
-    let phone, message;
-    
-    // --- Meta Webhook Adapter ---
+    // 1. EXTRACT DATA
     if (reqBody && reqBody.entry) {
-      const entry = reqBody.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
-      const messageObj = value?.messages?.[0];
-      if (!messageObj) return; // Ignore status updates
+      const messageObj = reqBody.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+      if (!messageObj) return;
       phone = messageObj.from;
       message = messageObj.text?.body || "";
+      msgId = messageObj.id;
     } else {
       phone = reqBody.phone;
       message = reqBody.message || "";
+      msgId = null;
     }
 
     if (!phone || !message) return;
-    
     message = message.trim();
     const msgLow = message.toLowerCase();
 
-    console.log(`[SESSION] ${phone} → state: ${sessions[phone]?.state || "NEW"}`);
+    // 2. LOG START
+    console.log(`[EXECUTION_START] phone=${phone} msgId=${msgId || 'none'}`);
 
+    // 3. DEDUPLICATION
+    const dedupKey = msgId || (phone + "_" + Buffer.from(message).toString('base64').substring(0, 10) + "_" + Math.floor(Date.now() / 1000));
+    if (processedMessages.has(dedupKey)) {
+      console.log(`[DEDUP] Skipping duplicate message: ${dedupKey}`);
+      return;
+    }
+    processedMessages.set(dedupKey, Date.now());
+
+    // 4. LOAD SESSION
     if (!sessions[phone]) {
       const existing = await checkExistingLead(phone);
-
       sessions[phone] = {
         state: existing ? "RETURNING" : "GREETING",
-        data: existing ? {
-          contactName: existing.contact_name,
-          is_returning: true
-        } : {},
+        data: existing ? { contactName: existing.contact_name, is_returning: true } : {},
         inactivityTimer: null,
-        ingested: !!existing
+        ingested: !!existing,
+        // Memory flags
+        repeat_count: {},
+        last_question_asked: null,
+        resume_offered: false,
+        last_intent_handled: null
       };
-
       if (!existing) {
-        sessions[phone].data.lastMessage = msgLow;
-        await sendToAPI(phone, sessions[phone], "initial");
+        // Async initial ingest
+        setImmediate(async () => {
+          try {
+            console.log('[ASYNC_INGEST] start (initial)');
+            await sendToAPI(phone, sessions[phone], "initial");
+            console.log('[ASYNC_INGEST] success (initial)');
+          } catch (e) { console.error('[ASYNC_INGEST_ERROR]', e); }
+        });
       }
     }
 
     const session = sessions[phone];
+    console.log(`[STATE_BEFORE] phone=${phone} state=${session.state}`);
 
     session.last_activity_at = new Date().toISOString();
     session.data.lastMessage = msgLow;
-
     resetInactivityTimer(phone);
 
+    // 5. RESTART CHECK (Requirement 4: ASK_RESUME Fix)
     const restartWords = ["hi","hello","hey","start","hii","helo"];
-    if (session && restartWords.some(w => msgLow === w)) {
-      const existingData = session.data || {};
-      const hasCollectedSomething = existingData.contactName && 
-                                     existingData.contactName !== "WhatsApp Lead";
-      
-      clearTimeout(session.inactivityTimer);
-      
-      if (hasCollectedSomething) {
+    if (restartWords.some(w => msgLow === w)) {
+      const hasCollectedSomething = session.data.contactName && session.data.contactName !== "WhatsApp Lead";
+      if (hasCollectedSomething && !session.resume_offered) {
+        console.log('[RESUME_TRIGGERED]');
         session.state = "ASK_RESUME";
-      } else {
+        session.resume_offered = true;
+        setReply("Welcome back! 👋 I see we were in the middle of our conversation. Would you like to continue from where we left off? (Yes/No)");
+        return finalizeWithIngest(phone, session, "update", finalize);
+      } else if (!hasCollectedSomething) {
         session.state = "GREETING";
         session.ingested = false;
+        session.resume_offered = false;
+        session.repeat_count = {};
+        // Fall through to process GREETING
       }
     }
 
-    // SALES INTENT
+    // 6. LOGIC PRIORITY
+
+    // A. SALES INTENT
     if (isSalesIntent(msgLow)) {
       session.data.request_call = true;
-      await sendToAPI(phone, session, "update");
-
-      await sendWhatsAppReply(phone, `👍 Got it!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, you can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
-      return;
+      console.log('[LOGIC_PATH] sales');
+      setReply(`👍 Got it!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, you can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
+      console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
+      return finalizeWithIngest(phone, session, "update", finalize);
     }
 
-    // POWER DETECTION
+    // B. POWER DETECTION
     const powerMatch = message.match(/[-+]\d+(\.\d+)?|\b\d+\.\d+\b/);
     if (powerMatch) {
       session.data.concern_power = true;
-      await sendToAPI(phone, session, "update");
-      
+      console.log('[LOGIC_PATH] power');
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "Got it 👍\n\n";
-
-      await sendWhatsAppReply(phone, `${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.\n\nWould you like me to check your eligibility quickly?`);
-      return;
+      setReply(`${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.\n\nWould you like me to check your eligibility quickly?`);
+      console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
+      return finalizeWithIngest(phone, session, "update", finalize);
     }
 
-    // ── TIMELINE STATE OVERRIDE
-    if (session.state === "TIMELINE") {
-      session.data.timeline = message;
-      session.state = "COMPLETE";
-      await sendToAPI(phone, session, "update");
-
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
-
-      await sendWhatsAppReply(phone, `${personalPrefix}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost\n• Recovery\n• Booking a consultation`);
-      return;
-    }
-
-    // KNOWLEDGE (GLOBAL)
+    // C. KNOWLEDGE INTENT
     const knowledge = buildKnowledgeResponse(msgLow, session);
     if (knowledge) {
-      await sendToAPI(phone, session, "knowledge");
-      await sendWhatsAppReply(phone, knowledge);
-      return;
+      console.log('[LOGIC_PATH] knowledge');
+      setReply(knowledge);
+      console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
+      return finalizeWithIngest(phone, session, "knowledge", finalize);
     }
 
+    // D. STATE MACHINE (Requirement 1 & 3: Loops & Repeated Prompts)
     const state = session.state;
+    console.log(`[STATE_DECISION] state=${state}`);
 
-    // ASK_RESUME — user returned after gap
-    if (state === "ASK_RESUME") {
-      const d = session.data;
-      const name = d.contactName ? d.contactName.split(" ")[0] : "there";
-      
-      const missing = [];
-      if (!d.surgeryCity) missing.push("preferred surgery city");
-      if (!d.insurance) missing.push("insurance");  
-      if (!d.timeline) missing.push("timeline");
-      
-      if (missing.length === 0) {
-        session.state = "COMPLETE";
-        await sendWhatsAppReply(phone, `Welcome back, ${name}! 👋 All your details are saved ✅\n\nOur specialist will contact you shortly.`);
-        return;
-      }
-      
-      session.state = "ASK_PERMISSION";
-      session.data._resuming = true; 
-      
-      await sendWhatsAppReply(phone, `Welcome back, ${name}! 👋\n\nWould you like to continue where we left off?\n\nStill needed: ${missing.join(", ")}\n\nReply *Yes* to continue or *No* to just chat 😊`);
-      return;
+    // Increment repeat count
+    session.repeat_count[state] = (session.repeat_count[state] || 0) + 1;
+    if (session.repeat_count[state] > 2) {
+      console.log(`[REPEAT_DETECTED] state=${state}`);
     }
 
-    // GREETING
     if (state === "GREETING") {
+      setReply("Hi! 👋 I'm your Relive Cure LASIK assistant.\n\nI can help you check your eligibility for LASIK and answer any questions about cost or recovery.\n\nShall we start? (Yes/No)");
       session.state = "ASK_PERMISSION";
-
-      await sendWhatsAppReply(phone, `Hi 👋 I'm the LASIK consultation assistant.\n\nWe help patients connect with trusted eye hospitals.\n\nShall I help you with a few quick details to guide you?`);
-      return;
     }
-
-    // ASK PERMISSION
-    if (state === "ASK_PERMISSION") {
-      const d = session.data;
-      
-      if (d._resuming) {
-        delete session.data._resuming;
-        
-        if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("haan") || msgLow.includes("sure") || msgLow.includes("haan ji")) {
-          if (!d.surgeryCity) {
-            session.state = "SURGERY_CITY";
-            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nWhich city would you prefer for surgery?`);
-            return;
-          }
-          if (!d.insurance) {
-            session.state = "INSURANCE";
-            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nDo you have medical insurance?`);
-            return;
-          }
-          if (!d.timeline) {
-            session.state = "TIMELINE";
-            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nWhen are you planning the surgery?`);
-            return;
-          }
-        } else {
-          session.state = "COMPLETE";
-          await sendWhatsAppReply(phone, `No problem! 😊 Feel free to ask me anything:\n• LASIK cost\n• Recovery time\n• Eligibility\n• Book consultation`);
-          return;
-        }
+    else if (state === "ASK_RESUME") {
+      const isYes = msgLow.includes("yes") || msgLow.includes("haan") || msgLow.includes("ha") || msgLow.includes("ok");
+      if (isYes) {
+        const next = getNextQuestion(session);
+        setReply(`Awesome! Let's pick up where we left off.\n\n${next.text}`);
+        session.state = next.field;
+      } else {
+        session.state = "GREETING";
+        session.data = {}; 
+        session.repeat_count = {};
+        session.resume_offered = false;
+        setReply("No problem! Let's start fresh.\n\nHi! 👋 I'm your Relive Cure LASIK assistant. Shall we start checking your eligibility? (Yes/No)");
+        session.state = "ASK_PERMISSION";
       }
-
-      if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("sure") || msgLow.includes("haan")) {
-        session.state = "NAME";
-        await sendWhatsAppReply(phone, `Great 👍 May I know your name?`);
-        return;
-      }
-
-      await sendWhatsAppReply(phone, `No worries 😊\n\nYou can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
-      return;
     }
-
-    // NAME
-    if (state === "NAME") {
-      if (!isValidName(message)) {
-        await sendWhatsAppReply(phone, `Could you please tell me your name?`);
-        return;
+    else if (state === "RETURNING") {
+      // Requirement 5: Returning User Redesign
+      const lead = await checkExistingLead(phone);
+      if (lead && lead.pushed_to_crm) {
+        session.state = "COMPLETE";
+        const firstName = session.data.contactName ? session.data.contactName.split(" ")[0] : "there";
+        setReply(`Welcome back, ${firstName}! 👋 Your details are already saved ✅\n\nWhat would you like to do?\n\n1. Talk to a specialist\n2. Ask a question`);
+      } else {
+        const next = getNextQuestion(session);
+        setReply(`Welcome back! Let's complete your profile.\n\n${next.text}`);
+        session.state = next.field;
       }
-
-      session.data.contactName = message;
-      session.state = "CITY";
-      await sendToAPI(phone, session, "update");
-
-      const firstName = message.split(" ")[0];
-      await sendWhatsAppReply(phone, `Nice to meet you, ${firstName}! 😊\n\nWhich city are you based in? 📍`);
-      return;
     }
-
-    // CITY
-    if (state === "CITY") {
+    else if (state === "ASK_PERMISSION") {
+      const isYes = msgLow.includes("yes") || msgLow.includes("haan") || msgLow.includes("ha") || msgLow.includes("ok") || msgLow.includes("sure");
+      if (isYes) {
+        const next = getNextQuestion(session);
+        setReply(next.text);
+        session.state = next.field;
+      } else {
+        setReply("No worries! If you change your mind, just say 'Hi'. Have a great day!");
+        session.state = "COMPLETE";
+      }
+    }
+    else if (state === "NAME") {
+      // Requirement 2: Repeat Protection for Name
+      if (session.repeat_count["NAME"] > 2 && message.length < 2) {
+        session.data.contactName = "WhatsApp Lead";
+        const next = getNextQuestion(session);
+        setReply(`No problem, let's skip that for now.\n\n${next.text}`);
+        session.state = next.field;
+      } else if (message.length < 2) {
+        setReply("Could you please tell me your name?");
+      } else {
+        session.data.contactName = message;
+        const next = getNextQuestion(session);
+        setReply(next.text);
+        session.state = next.field;
+      }
+    }
+    else if (state === "CITY") {
       session.data.city = message;
-      session.state = "SURGERY_CITY";
-      await sendToAPI(phone, session, "update");
-
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
-
-      await sendWhatsAppReply(phone, `${personalPrefix}Which city would you prefer for surgery? (You can choose any city)`);
-      return;
+      const next = getNextQuestion(session);
+      setReply(next.text);
+      session.state = next.field;
     }
-
-    // SURGERY CITY
-    if (state === "SURGERY_CITY") {
-      session.data.surgeryCity = msgLow.includes("any") ? "Flexible" : message;
-      session.state = "INSURANCE";
-      await sendToAPI(phone, session, "update");
-
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
-
-      await sendWhatsAppReply(phone, `${personalPrefix}Do you have medical insurance?`);
-      return;
+    else if (state === "SURGERY_CITY") {
+      session.data.surgeryCity = message;
+      const next = getNextQuestion(session);
+      setReply(next.text);
+      session.state = next.field;
     }
-
-    // INSURANCE
-    if (state === "INSURANCE") {
+    else if (state === "INSURANCE") {
       session.data.insurance = message;
-      session.state = "TIMELINE";
-      await sendToAPI(phone, session, "update");
-
-      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
-      const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
-
-      await sendWhatsAppReply(phone, `${personalPrefix}When are you planning the surgery?`);
-      return;
+      const next = getNextQuestion(session);
+      setReply(next.text);
+      session.state = next.field;
     }
-
-    // RETURNING
-    if (state === "RETURNING") {
+    else if (state === "TIMELINE") {
+      session.data.timeline = message;
       session.state = "COMPLETE";
-      const d = session.data;
-      const firstName = d.contactName ? d.contactName.split(" ")[0] : "there";
-      
-      await sendWhatsAppReply(phone, `Welcome back, ${firstName}! 👋\n\nWhat would you like to know?\n• Cost\n• Recovery\n• Talk to a doctor`);
-      return;
+      const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
+      setReply(`${name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉"}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost\n• Recovery\n• Eligibility`);
+    }
+    else if (state === "COMPLETE") {
+      const knowledgeAgain = buildKnowledgeResponse(msgLow, session);
+      if (knowledgeAgain) {
+        setReply(knowledgeAgain);
+      } else {
+        setReply("Your request is already with our team! Is there anything else you'd like to know about LASIK recovery or costs?");
+      }
     }
 
-    // FINAL FALLBACK
-    await sendWhatsAppReply(phone, `I didn't fully get that, but I can help with:\n\n• LASIK cost  \n• Recovery time  \n• Eligibility  \n\nOr I can arrange a specialist call for you.`);
-    return;
+    // E. FALLBACK (if still no reply)
+    if (!reply) {
+      console.log('[LOGIC_PATH] fallback');
+    }
+
+    console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
+    return finalizeWithIngest(phone, session, "update", finalize);
 
   } catch (err) {
     console.error("Processing error:", err);
-    await sendWhatsAppReply(reqBody.phone || (reqBody.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from), `Something went wrong. Please try again.`);
+    setReply(`Something went wrong. Please try again.`);
+    finalize();
   } finally {
     schedulePersist();
   }
+}
+
+/** Helper to wrap finalize with non-blocking ingest */
+function finalizeWithIngest(phone, session, trigger, finalizeFn) {
+  setImmediate(async () => {
+    try {
+      console.log('[ASYNC_INGEST] start');
+      await sendToAPI(phone, session, trigger);
+      console.log('[ASYNC_INGEST] success');
+    } catch (e) {
+      console.error('[ASYNC_INGEST_ERROR]', e);
+    }
+  });
+  finalizeFn();
 }
 
 app.post("/webhook", async (req, res) => {
