@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", version: "v4.1-hardened" });
+  res.json({ status: "OK", version: "v4.2-chat" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -586,7 +586,16 @@ async function sendWhatsAppReply(phone, reply) {
   }
 }
 
-async function handleIncomingMessage(reqBody) {
+app.post("/chat", async (req, res) => {
+  try {
+    const reply = await handleIncomingMessage(req.body, true);
+    res.json({ reply });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+async function handleIncomingMessage(reqBody, isTestChat = false) {
   let phone, message, msgId;
   let reply = null;
   let replied = false;
@@ -598,16 +607,19 @@ async function handleIncomingMessage(reqBody) {
     replied = true;
   };
 
-  const finalize = () => {
-    if (finalized) return;
+  const finalize = (forceReturn = false) => {
+    if (finalized) return reply;
     finalized = true;
 
     if (!reply) {
       reply = `I didn't fully get that, but I can help with:\n\n• LASIK cost  \n• Recovery time  \n• Eligibility  \n\nOr I can arrange a specialist call for you.`;
     }
 
-    console.log('[REPLY_FINAL]', reply);
-    sendWhatsAppReply(phone, reply);
+    console.log(`[FINALIZE] phone=${phone} forceReturn=${forceReturn} reply_length=${reply ? reply.length : 0}`);
+    if (!forceReturn) {
+      sendWhatsAppReply(phone, reply);
+    }
+    return reply;
   };
 
   try {
@@ -681,7 +693,7 @@ async function handleIncomingMessage(reqBody) {
         session.state = "ASK_RESUME";
         session.resume_offered = true;
         setReply("Welcome back! 👋 I see we were in the middle of our conversation. Would you like to continue from where we left off? (Yes/No)");
-        return finalizeWithIngest(phone, session, "update", finalize);
+        return finalizeWithIngest(phone, session, "update", finalize, isTestChat);
       } else if (!hasCollectedSomething) {
         session.state = "GREETING";
         session.ingested = false;
@@ -699,7 +711,7 @@ async function handleIncomingMessage(reqBody) {
       console.log('[LOGIC_PATH] sales');
       setReply(`👍 Got it!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, you can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
       console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
-      return finalizeWithIngest(phone, session, "update", finalize);
+      return finalizeWithIngest(phone, session, "update", finalize, isTestChat);
     }
 
     // B. POWER DETECTION
@@ -711,7 +723,7 @@ async function handleIncomingMessage(reqBody) {
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "Got it 👍\n\n";
       setReply(`${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.\n\nWould you like me to check your eligibility quickly?`);
       console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
-      return finalizeWithIngest(phone, session, "update", finalize);
+      return finalizeWithIngest(phone, session, "update", finalize, isTestChat);
     }
 
     // C. KNOWLEDGE INTENT
@@ -720,7 +732,7 @@ async function handleIncomingMessage(reqBody) {
       console.log('[LOGIC_PATH] knowledge');
       setReply(knowledge);
       console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
-      return finalizeWithIngest(phone, session, "knowledge", finalize);
+      return finalizeWithIngest(phone, session, "knowledge", finalize, isTestChat);
     }
 
     // D. STATE MACHINE (Requirement 1 & 3: Loops & Repeated Prompts)
@@ -831,7 +843,7 @@ async function handleIncomingMessage(reqBody) {
     }
 
     console.log(`[STATE_AFTER] phone=${phone} state=${session.state}`);
-    return finalizeWithIngest(phone, session, "update", finalize);
+    return finalizeWithIngest(phone, session, "update", finalize, isTestChat);
 
   } catch (err) {
     console.error("Processing error:", err);
@@ -843,7 +855,7 @@ async function handleIncomingMessage(reqBody) {
 }
 
 /** Helper to wrap finalize with non-blocking ingest */
-function finalizeWithIngest(phone, session, trigger, finalizeFn) {
+function finalizeWithIngest(phone, session, trigger, finalizeFn, isTestChat = false) {
   setImmediate(async () => {
     try {
       console.log('[ASYNC_INGEST] start');
@@ -853,7 +865,7 @@ function finalizeWithIngest(phone, session, trigger, finalizeFn) {
       console.error('[ASYNC_INGEST_ERROR]', e);
     }
   });
-  finalizeFn();
+  return finalizeFn(isTestChat);
 }
 
 app.post("/webhook", async (req, res) => {
@@ -873,7 +885,7 @@ app.post("/webhook", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`[SERVER] WhatsApp Bot is running on port ${PORT}`);
-  console.log("🚀 BOT VERSION: v4.1-hardened");
+  console.log("🚀 BOT VERSION: v4.2-chat");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
 
