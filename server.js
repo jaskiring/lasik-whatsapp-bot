@@ -448,57 +448,48 @@ async function sendWhatsAppReply(phone, reply) {
   const payload = {
     messaging_product: "whatsapp",
     to: phone,
+    type: "text",
     text: { body: reply }
   };
   try {
-    console.log('[WA SEND] Sending reply to', phone);
+    console.log(`[WA SEND] Sending reply to: ${phone}`);
+    console.log("[WA SEND] Using token:", process.env.WHATSAPP_ACCESS_TOKEN?.slice(0,10));
     await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
         "Content-Type": "application/json"
       }
     });
+    console.log("[WA SEND] ✅ Success");
   } catch (err) {
-    console.error('[WA SEND] ❌ Error:', err.response?.data || err.message);
+    console.error("[WA SEND ERROR FULL]", err.response?.data || err.message);
   }
 }
 
-app.post("/webhook", async (req, res) => {
-  // Acknowledge Meta immediately
-  if (req.body && req.body.entry) {
-    res.sendStatus(200);
-  }
-
-  // --- Meta Webhook Adapter ---
-  if (req.body && req.body.entry) {
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const messageObj = value?.messages?.[0];
-    if (!messageObj) return; // Ignore status updates
-    req.body.phone = messageObj.from;
-    req.body.message = messageObj.text?.body || "";
-  }
-  
-  const originalPhone = req.body.phone;
-  const originalJson = res.json.bind(res);
-  res.json = async function(body) {
-    if (body && body.reply && originalPhone) {
-      await sendWhatsAppReply(originalPhone, body.reply);
-    }
-    return originalJson(body);
-  };
-  // ----------------------------
-
+async function handleIncomingMessage(reqBody) {
   try {
-    if (!req.body || !req.body.phone || !req.body.message) {
-      return res.status(400).json({ error: "Invalid request" });
+    let phone, message;
+    
+    // --- Meta Webhook Adapter ---
+    if (reqBody && reqBody.entry) {
+      const entry = reqBody.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
+      const messageObj = value?.messages?.[0];
+      if (!messageObj) return; // Ignore status updates
+      phone = messageObj.from;
+      message = messageObj.text?.body || "";
+    } else {
+      phone = reqBody.phone;
+      message = reqBody.message || "";
     }
-    const phone   = req.body.phone;
-    const message = (req.body.message || "").trim();
-    const msgLow  = message.toLowerCase();
 
-    if (!phone) return res.status(400).json({ error: "phone is required" });
+    if (!phone || !message) return;
+    
+    message = message.trim();
+    const msgLow = message.toLowerCase();
+
+    console.log(`[SESSION] ${phone} → state: ${sessions[phone]?.state || "NEW"}`);
 
     if (!sessions[phone]) {
       const existing = await checkExistingLead(phone);
@@ -535,10 +526,8 @@ app.post("/webhook", async (req, res) => {
       clearTimeout(session.inactivityTimer);
       
       if (hasCollectedSomething) {
-        // User has partial data — ask if they want to continue
         session.state = "ASK_RESUME";
       } else {
-        // No meaningful data collected — fresh start
         session.state = "GREETING";
         session.ingested = false;
       }
@@ -549,16 +538,8 @@ app.post("/webhook", async (req, res) => {
       session.data.request_call = true;
       await sendToAPI(phone, session, "update");
 
-      return res.json({
-        reply: `👍 Got it!
-
-Our LASIK specialist will call you shortly.
-
-Meanwhile, you can ask me about:
-• Cost
-• Recovery
-• Eligibility`
-      });
+      await sendWhatsAppReply(phone, `👍 Got it!\n\nOur LASIK specialist will call you shortly.\n\nMeanwhile, you can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
+      return;
     }
 
     // POWER DETECTION
@@ -570,16 +551,11 @@ Meanwhile, you can ask me about:
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "Got it 👍\n\n";
 
-      return res.json({
-        reply: `${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.
-
-Would you like me to check your eligibility quickly?`
-      });
+      await sendWhatsAppReply(phone, `${personalPrefix}Based on your eye power, you could be a good candidate for LASIK.\n\nWould you like me to check your eligibility quickly?`);
+      return;
     }
 
-    // ── TIMELINE STATE OVERRIDE — must run BEFORE knowledge base ─────────────
-    // When bot is in TIMELINE state, ALWAYS capture reply as timeline.
-    // Intent detection / KB must NOT intercept this.
+    // ── TIMELINE STATE OVERRIDE
     if (session.state === "TIMELINE") {
       session.data.timeline = message;
       session.state = "COMPLETE";
@@ -588,29 +564,17 @@ Would you like me to check your eligibility quickly?`
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉";
 
-      return res.json({
-        reply: `${personalPrefix}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost\n• Recovery\n• Booking a consultation`
-      });
+      await sendWhatsAppReply(phone, `${personalPrefix}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost\n• Recovery\n• Booking a consultation`);
+      return;
     }
 
     // KNOWLEDGE (GLOBAL)
     const knowledge = buildKnowledgeResponse(msgLow, session);
     if (knowledge) {
-      // PERSIST Intelligence extracted in KB
       await sendToAPI(phone, session, "knowledge");
-      return res.json({
-        reply: knowledge
-      });
+      await sendWhatsAppReply(phone, knowledge);
+      return;
     }
-
-    const getNextStep = (d) => {
-      if (!d.contactName || d.contactName === "WhatsApp Lead") return "NAME";
-      if (!d.city) return "CITY";
-      if (!d.surgeryCity) return "SURGERY_CITY";
-      if (!d.insurance) return "INSURANCE";
-      if (!d.timeline) return "TIMELINE";
-      return "COMPLETE";
-    };
 
     const state = session.state;
 
@@ -626,92 +590,70 @@ Would you like me to check your eligibility quickly?`
       
       if (missing.length === 0) {
         session.state = "COMPLETE";
-        return res.json({
-          reply: `Welcome back, ${name}! 👋 All your details are saved ✅\n\nOur specialist will contact you shortly.`
-        });
+        await sendWhatsAppReply(phone, `Welcome back, ${name}! 👋 All your details are saved ✅\n\nOur specialist will contact you shortly.`);
+        return;
       }
       
-      // Move to special resume permission state
       session.state = "ASK_PERMISSION";
-      session.data._resuming = true; // flag that next yes/no is for resuming
+      session.data._resuming = true; 
       
-      return res.json({
-        reply: `Welcome back, ${name}! 👋\n\nWould you like to continue where we left off?\n\nStill needed: ${missing.join(", ")}\n\nReply *Yes* to continue or *No* to just chat 😊`
-      });
+      await sendWhatsAppReply(phone, `Welcome back, ${name}! 👋\n\nWould you like to continue where we left off?\n\nStill needed: ${missing.join(", ")}\n\nReply *Yes* to continue or *No* to just chat 😊`);
+      return;
     }
 
     // GREETING
     if (state === "GREETING") {
       session.state = "ASK_PERMISSION";
 
-      return res.json({
-        reply: `Hi 👋 I'm the LASIK consultation assistant.
-
-We help patients connect with trusted eye hospitals.
-
-Shall I help you with a few quick details to guide you?`
-      });
+      await sendWhatsAppReply(phone, `Hi 👋 I'm the LASIK consultation assistant.\n\nWe help patients connect with trusted eye hospitals.\n\nShall I help you with a few quick details to guide you?`);
+      return;
     }
 
     // ASK PERMISSION
     if (state === "ASK_PERMISSION") {
       const d = session.data;
       
-      // Handle resume yes/no
       if (d._resuming) {
         delete session.data._resuming;
         
         if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("haan") || msgLow.includes("sure") || msgLow.includes("haan ji")) {
-          // Resume from next missing field
           if (!d.surgeryCity) {
             session.state = "SURGERY_CITY";
-            return res.json({ reply: `Great! Let's continue 😊\n\nWhich city would you prefer for surgery?` });
+            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nWhich city would you prefer for surgery?`);
+            return;
           }
           if (!d.insurance) {
             session.state = "INSURANCE";
-            return res.json({ reply: `Great! Let's continue 😊\n\nDo you have medical insurance?` });
+            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nDo you have medical insurance?`);
+            return;
           }
           if (!d.timeline) {
             session.state = "TIMELINE";
-            return res.json({ reply: `Great! Let's continue 😊\n\nWhen are you planning the surgery?` });
+            await sendWhatsAppReply(phone, `Great! Let's continue 😊\n\nWhen are you planning the surgery?`);
+            return;
           }
         } else {
-          // No — free chat mode
           session.state = "COMPLETE";
-          return res.json({
-            reply: `No problem! 😊 Feel free to ask me anything:
-• LASIK cost
-• Recovery time
-• Eligibility
-• Book consultation`
-          });
+          await sendWhatsAppReply(phone, `No problem! 😊 Feel free to ask me anything:\n• LASIK cost\n• Recovery time\n• Eligibility\n• Book consultation`);
+          return;
         }
       }
 
-      // Original new user flow:
       if (msgLow.includes("yes") || msgLow.includes("ok") || msgLow.includes("sure") || msgLow.includes("haan")) {
         session.state = "NAME";
-        return res.json({
-          reply: `Great 👍 May I know your name?`
-        });
+        await sendWhatsAppReply(phone, `Great 👍 May I know your name?`);
+        return;
       }
 
-      return res.json({
-        reply: `No worries 😊
-
-You can ask me about:
-• Cost
-• Recovery
-• Eligibility`
-      });
+      await sendWhatsAppReply(phone, `No worries 😊\n\nYou can ask me about:\n• Cost\n• Recovery\n• Eligibility`);
+      return;
     }
 
     // NAME
     if (state === "NAME") {
       if (!isValidName(message)) {
-        return res.json({
-          reply: `Could you please tell me your name?`
-        });
+        await sendWhatsAppReply(phone, `Could you please tell me your name?`);
+        return;
       }
 
       session.data.contactName = message;
@@ -719,11 +661,8 @@ You can ask me about:
       await sendToAPI(phone, session, "update");
 
       const firstName = message.split(" ")[0];
-      return res.json({
-        reply: `Nice to meet you, ${firstName}! 😊
-
-Which city are you based in? 📍`
-      });
+      await sendWhatsAppReply(phone, `Nice to meet you, ${firstName}! 😊\n\nWhich city are you based in? 📍`);
+      return;
     }
 
     // CITY
@@ -735,9 +674,8 @@ Which city are you based in? 📍`
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
 
-      return res.json({
-        reply: `${personalPrefix}Which city would you prefer for surgery? (You can choose any city)`
-      });
+      await sendWhatsAppReply(phone, `${personalPrefix}Which city would you prefer for surgery? (You can choose any city)`);
+      return;
     }
 
     // SURGERY CITY
@@ -749,9 +687,8 @@ Which city are you based in? 📍`
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
 
-      return res.json({
-        reply: `${personalPrefix}Do you have medical insurance?`
-      });
+      await sendWhatsAppReply(phone, `${personalPrefix}Do you have medical insurance?`);
+      return;
     }
 
     // INSURANCE
@@ -763,45 +700,40 @@ Which city are you based in? 📍`
       const name = session.data.contactName ? session.data.contactName.split(" ")[0] : "";
       const personalPrefix = name ? `Got it, ${name} 👍\n\n` : "";
 
-      return res.json({
-        reply: `${personalPrefix}When are you planning the surgery?`
-      });
+      await sendWhatsAppReply(phone, `${personalPrefix}When are you planning the surgery?`);
+      return;
     }
 
-    // TIMELINE — handled BEFORE knowledge base (see override block above)
-    // This point is never reached when state=TIMELINE
-
-    // RETURNING / COMPLETE
-    if (state === "RETURNING" || state === "COMPLETE") {
+    // RETURNING
+    if (state === "RETURNING") {
+      session.state = "COMPLETE";
       const d = session.data;
       const firstName = d.contactName ? d.contactName.split(" ")[0] : "there";
       
-      return res.json({
-        reply: `Welcome back, ${firstName}! 👋
-
-What would you like to know?
-• Cost
-• Recovery
-• Talk to a doctor`
-      });
+      await sendWhatsAppReply(phone, `Welcome back, ${firstName}! 👋\n\nWhat would you like to know?\n• Cost\n• Recovery\n• Talk to a doctor`);
+      return;
     }
 
     // FINAL FALLBACK
-    return res.json({
-      reply: `I didn't fully get that, but I can help with:
-
-• LASIK cost  
-• Recovery time  
-• Eligibility  
-
-Or I can arrange a specialist call for you.`
-    });
+    await sendWhatsAppReply(phone, `I didn't fully get that, but I can help with:\n\n• LASIK cost  \n• Recovery time  \n• Eligibility  \n\nOr I can arrange a specialist call for you.`);
+    return;
 
   } catch (err) {
-    console.error(err);
-    return res.json({
-      reply: `Something went wrong. Please try again.`
-    });
+    console.error("Processing error:", err);
+    await sendWhatsAppReply(reqBody.phone || (reqBody.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from), `Something went wrong. Please try again.`);
+  } finally {
+    schedulePersist();
+  }
+}
+
+app.post("/webhook", async (req, res) => {
+  console.log("📩 Incoming webhook received");
+  res.sendStatus(200);
+
+  try {
+    await handleIncomingMessage(req.body);
+  } catch (err) {
+    console.error("Webhook processing error:", err);
   }
 });
 
