@@ -484,7 +484,7 @@ function getNextQuestion(session, context = "normal") {
   let field = null;
   let variations = [];
 
-  if (!d.contactName || d.contactName === "WhatsApp Lead") {
+  if (!d.contactName) {
     field = "NAME";
     variations = QUESTION_VARIATIONS.NAME;
   } else if (!d.city) {
