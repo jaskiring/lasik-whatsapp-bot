@@ -15,11 +15,19 @@ app.get("/health", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONFIG
+// CONFIG & ENV VALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
+const REQUIRED_ENV = ["BOT_SECRET", "WEBHOOK_VERIFY_TOKEN", "WHATSAPP_ACCESS_TOKEN", "PHONE_NUMBER_ID"];
+const missing = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missing.length > 0) {
+  console.error(`[FATAL] Missing required environment variables: ${missing.join(", ")}`);
+  process.exit(1);
+}
+
 const INACTIVITY_MS = 2 * 60 * 1000;                          // 2 minutes
 const API_URL       = "https://relive-cure-backend-production.up.railway.app/api/ingest-lead";
-const BOT_SECRET    = "RELIVE_BOT_SECRET";
+const BOT_SECRET    = process.env.BOT_SECRET;
+const VERIFY_TOKEN  = process.env.WEBHOOK_VERIFY_TOKEN;
 const SESSION_FILE  = path.join(__dirname, "sessions.json");
 
 // States in which knowledge responses are ALLOWED (TIMELINE, SURGERY_CITY, INSURANCE excluded — direct answer required)
@@ -428,22 +436,20 @@ function buildKnowledgeResponse(message, session) {
 // CHATBOT WEBHOOK
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "relive_verify_token_123";
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
+  const mode      = req.query["hub.mode"];
+  const token     = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("[WEBHOOK] ✅ Verification successful");
     return res.status(200).send(challenge);
   }
+  
+  console.warn("[WEBHOOK] ❌ Verification failed");
   return res.sendStatus(403);
 });
 
 async function sendWhatsAppReply(phone, reply) {
-  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.PHONE_NUMBER_ID) {
-    console.log('[WA SEND DRY RUN]', phone, '->', reply);
-    return;
-  }
   const url = `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`;
   const payload = {
     messaging_product: "whatsapp",
@@ -451,18 +457,42 @@ async function sendWhatsAppReply(phone, reply) {
     type: "text",
     text: { body: reply }
   };
-  try {
-    console.log(`[WA SEND] Sending reply to: ${phone}`);
-    console.log("[WA SEND] Using token:", process.env.WHATSAPP_ACCESS_TOKEN?.slice(0,10));
-    await axios.post(url, payload, {
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
+
+  const MAX_RETRIES = 3;
+  let attempt = 0;
+
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    try {
+      console.log(`[WA SEND] Sending reply to: ${phone} (Attempt ${attempt})`);
+      await axios.post(url, payload, {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 10000
+      });
+      console.log("[WA SEND] ✅ Success");
+      return; // STOP immediately on success
+    } catch (err) {
+      const status = err.response?.status;
+      const isRetryable = !status || status === 429 || status >= 500;
+      
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const delay = attempt * 1000;
+        console.warn(`[WA RETRY] Attempt ${attempt} failed (status: ${status || 'network'}). Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
       }
-    });
-    console.log("[WA SEND] ✅ Success");
-  } catch (err) {
-    console.error("[WA SEND ERROR FULL]", err.response?.data || err.message);
+      
+      console.error("[WA SEND FAIL]", {
+        phone,
+        status: status,
+        error: err.response?.data || err.message,
+        attempt
+      });
+      break;
+    }
   }
 }
 
@@ -743,9 +773,25 @@ app.post("/webhook", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`[SERVER] WhatsApp Bot is running on port ${PORT}`);
-  console.log("🚀 BOT VERSION: v4-final-render-conn-fix");
+  console.log("🚀 BOT VERSION: v4.1-hardened");
   console.log(`[CHATBOT] API_URL: ${API_URL}`);
   console.log(`[SESSION] File: ${SESSION_FILE}`);
-  console.log(`[CHATBOT] Inactivity timeout: ${INACTIVITY_MS / 1000}s`);
-  console.log(`[CHATBOT] Wake delay: 15000ms (Render cold start)`);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // HEARTBEAT (Self-ping to prevent sleep)
+  // ─────────────────────────────────────────────────────────────────────────────
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    const selfPingUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/health`;
+    console.log(`[HEARTBEAT] Enabled for ${selfPingUrl}`);
+    setInterval(async () => {
+      try {
+        await axios.get(selfPingUrl);
+        console.log("[HEARTBEAT] ✅ Ping success");
+      } catch (err) {
+        console.warn("[HEARTBEAT] ❌ Ping failed:", err.message);
+      }
+    }, 4 * 60 * 1000); // Every 4 mins
+  } else {
+    console.log("[HEARTBEAT] ℹ️ Skipped (RAILWAY_PUBLIC_DOMAIN not set)");
+  }
 });
