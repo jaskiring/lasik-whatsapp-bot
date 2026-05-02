@@ -582,31 +582,14 @@ function buildKnowledgeResponse(message, session) {
   const topIntent = intents[0];
   let baseReply = "";
 
-  if (session.last_intent_handled === topIntent) {
-    const shortPhrases = {
-      EN: [
-        `I covered ${topIntent.toLowerCase()} above — anything else I can help with?`,
-        `As mentioned, happy to arrange a specialist call for more details!`,
-        `Still thinking about it? Our specialist can answer in detail. Type *call*.`
-      ],
-      HI: [
-        `मैंने ऊपर ${topIntent.toLowerCase()} के बारे में बताया — कुछ और जानना है?`,
-        `Specialist से बात करें? बस *call* लिखें।`,
-        `और जानकारी चाहिए? हमारा specialist detail में बताएगा। *call* लिखें।`
-      ]
-    };
-    const arr = shortPhrases[lang] || shortPhrases.EN;
-    baseReply = arr[Math.floor(Math.random() * arr.length)];
-  } else {
-    session.last_intent_handled = topIntent;
-    const kbEntry = KB[topIntent];
-    if (kbEntry) {
-      baseReply = kbEntry[lang] || kbEntry.EN;
-    }
-    if (intents.length > 1 && KB[intents[1]]) {
-      const second = KB[intents[1]][lang] || KB[intents[1]].EN;
-      if (second) baseReply += `\n\n─────────────\n\n${second}`;
-    }
+  session.last_intent_handled = topIntent;
+  const kbEntry = KB[topIntent];
+  if (kbEntry) {
+    baseReply = kbEntry[lang] || kbEntry.EN;
+  }
+  if (intents.length > 1 && KB[intents[1]]) {
+    const second = KB[intents[1]][lang] || KB[intents[1]].EN;
+    if (second) baseReply += `\n\n─────────────\n\n${second}`;
   }
 
   if (!baseReply) return null;
@@ -619,15 +602,12 @@ function buildKnowledgeResponse(message, session) {
   if (intents.includes("TIMELINE")) session.data.timeline = message;
 
   const ctaMap = {
-    EN: "\n\nWould you like to arrange a free specialist consultation?",
-    HI: "\n\nक्या आप free specialist consultation लेना चाहेंगे?"
+    EN: "\n\nOur representative will call you shortly. 😊",
+    HI: "\n\nहमारा representative जल्द ही आपको call करेगा। 😊"
   };
   const cta = ctaMap[lang] || ctaMap.EN;
 
-  const nextStep = getNextQuestion(session, "resume");
-  const flowResume = nextStep.text ? `\n\n─────────────\n\n${nextStep.text}` : "";
-
-  return baseReply + cta + flowResume;
+  return baseReply + cta;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -835,9 +815,8 @@ async function handleIncomingMessage(reqBody, isTestChat = false) {
     const session = sessions[phone];
 
     // 4. Update language on each message (user may switch languages)
-    const detectedLang = detectLanguage(message);
-    if (detectedLang === "HI") session.lang = "HI"; // sticky: once Hindi, stay Hindi
-    const lang = session.lang || "EN";
+    const lang = detectLanguage(message);
+    session.lang = lang;
 
     session.last_activity_at = new Date().toISOString();
     if (!session.data.first_message_at) session.data.first_message_at = session.last_activity_at;
@@ -1023,23 +1002,29 @@ async function handleIncomingMessage(reqBody, isTestChat = false) {
         ? session.data.contactName.split(" ")[0]
         : "";
       const doneMap = {
-        EN: `${name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉"}\n\nOur LASIK specialist will contact you shortly.\n\nMeanwhile, I can help you with:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍`,
-        HI: `${name ? `बढ़िया, ${name}! 🎉` : "बढ़िया! 🎉"}\n\nहमारा LASIK specialist जल्द ही आपसे संपर्क करेगा।\n\nइस बीच, आप पूछ सकते हैं:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍`
+        EN: `${name ? `Perfect, ${name}! 🎉` : "Perfect! 🎉"}\n\nOur representative will call you shortly to discuss your LASIK consultation.\n\nMeanwhile, feel free to ask me anything about:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍`,
+        HI: `${name ? `बढ़िया, ${name}! 🎉` : "बढ़िया! 🎉"}\n\nहमारा representative जल्द ही आपको LASIK consultation के बारे में call करेगा।\n\nइस बीच, कुछ भी पूछें:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍`
       };
       setReply(doneMap[lang] || doneMap.EN);
     }
 
     else if (state === "COMPLETE") {
       const knowledgeAgain = buildKnowledgeResponse(message, session);
+      let reply = "";
       if (knowledgeAgain) {
-        setReply(knowledgeAgain);
+        reply = knowledgeAgain;
       } else {
         const doneMap = {
           EN: "Your request is with our team! 👍\n\nAnything else? You can ask about:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍\n\nOr type *call* to speak with a specialist.",
           HI: "आपकी request हमारी team के पास है! 👍\n\nकुछ और जानना है? पूछ सकते हैं:\n• Cost 💰\n• Recovery ⚡\n• Eligibility 🔍\n\nया specialist से बात के लिए *call* लिखें।"
         };
-        setReply(doneMap[lang] || doneMap.EN);
+        reply = doneMap[lang] || doneMap.EN;
       }
+      const finalTouch = {
+        EN: "\n\nOur representative will be in touch shortly. 😊",
+        HI: "\n\nहमारा representative जल्द संपर्क करेगा। 😊"
+      };
+      setReply(reply + (finalTouch[lang] || finalTouch.EN));
     }
 
     return finalizeWithIngest(phone, session, "update", finalize, isTestChat);
