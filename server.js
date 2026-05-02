@@ -312,14 +312,16 @@ const INTENTS = {
     "योग्य", "हो सकता", "कर सकता", "हो सकती"
   ],
   REFERRAL: [
-    "refer", "referral", "reward", "earn", "paisa", "kya milega", "kitna milega",
+    "refer", "referral", "reward", "earn", "kya milega", "kitna milega",
     "refer friend", "refer kaise", "money", "पैसा", "रेफर", "कमाई"
   ],
   COST: [
     "cost", "price", "charges", "fees", "kharcha", "rate", "expense", "amount",
     "lasik cost", "laser cost", "eye surgery cost", "total cost", "kitna padega",
     "kitne ka padega", "kitna hai", "kitne ka", "kitne ki", "price kya",
-    "surgery ka price", "kitne paise", "कितना खर्चा", "कीमत", "फीस", "खर्च", "रेट"
+    "surgery ka price", "kitne paise", "kitna paisa", "paisa kitna", "kitna paisa lgega",
+    "paisa lagega", "paisa lgega", "kitna paisa lagega", "paisa chahiye", "kitne paise lagenge",
+    "कितना खर्चा", "कीमत", "फीस", "खर्च", "रेट"
   ],
   YES: [
     "yes", "haan", "ha", "haan ji", "ok", "okay", "sure", "chalo", "start", "bilkul",
